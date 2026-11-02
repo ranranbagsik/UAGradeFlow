@@ -556,8 +556,20 @@ function renderMainLayout() {
   ];
 
   return `
-    <div class="flex h-screen overflow-hidden">
-      <aside class="w-64 glass-sidebar flex flex-col justify-between p-4 flex-shrink-0">
+    <div class="flex flex-col md:flex-row h-screen overflow-hidden">
+      <!-- Mobile Top Navigation Bar -->
+      <div class="md:hidden flex items-center justify-between p-4 glass-sidebar border-b border-slate-800 flex-shrink-0">
+        <div class="flex items-center gap-2">
+          ${getUASealSVG("w-7 h-7")}
+          <h2 class="font-black text-xs text-brand-500 dark:text-amber-400">UA GradeFlow</h2>
+        </div>
+        <button type="button" onclick="toggleMobileMenu()" class="p-2 rounded-xl bg-slate-800 text-slate-200">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+      </div>
+
+      <!-- Sidebar (Hidden on mobile by default, togglable) -->
+      <aside id="appSidebar" class="hidden md:flex w-full md:w-64 glass-sidebar flex-col justify-between p-4 flex-shrink-0 z-30">
         <div class="space-y-6">
           <div class="flex items-center gap-3 px-2">
             ${getUASealSVG("w-9 h-9")}
@@ -579,7 +591,7 @@ function renderMainLayout() {
         </div>
 
         <div class="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
-          <button type="button" onclick="toggleTheme()" class="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-slate-200/70 dark:bg-slate-800/70 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-bold transition-all hover:bg-slate-300/70 dark:hover:bg-slate-700">
+          <button type="button" onclick="toggleTheme()" class="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-slate-200/70 dark:bg-slate-800/75 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-bold transition-all">
             <span class="flex items-center gap-2">
               <svg class="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 ${uiState.darkMode 
@@ -608,11 +620,24 @@ function renderMainLayout() {
         </div>
       </aside>
 
-      <main class="flex-1 overflow-y-auto p-6 md:p-8 space-y-6">
+      <main class="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 space-y-6">
         ${renderActivePage()}
       </main>
     </div>
   `;
+}
+
+function toggleMobileMenu() {
+  const sidebar = document.getElementById('appSidebar');
+  if (sidebar) {
+    sidebar.classList.toggle('hidden');
+    sidebar.classList.toggle('flex');
+    sidebar.classList.toggle('absolute');
+    sidebar.classList.toggle('inset-y-0');
+    sidebar.classList.toggle('left-0');
+    sidebar.classList.toggle('z-50');
+    sidebar.classList.toggle('h-full');
+  }
 }
 
 function switchPage(pageId) {
