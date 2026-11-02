@@ -1696,7 +1696,7 @@ function renderTranscriptModal() {
             📥 Download PDF
           </button>
           <button type="button" onclick="openOutlookWebDraft()" class="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2">
-            <span>✉️ Open Outlook Web Draft</span>
+            <span>✉️ Open Gmail Web Draft</span>
           </button>
         </div>
       </div>
