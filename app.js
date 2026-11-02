@@ -1615,14 +1615,19 @@ function renderTranscriptModal() {
     return;
   }
 
+ // Compute target values
   const student = appState.students.find(s => s.id === activeTranscriptState.studentId);
-  const sm = getStudentSummary(student);
   const passVal = activeTranscriptState.passwordMode === 'pin' ? student.parent.pin : student.id;
-  const targetEmail = activeTranscriptState.recipient === 'student' ? student.email : (activeTranscriptState.recipient === 'guardian' ? student.parent.email : `${student.email}, ${student.parent.email}`);
   const passLabel = activeTranscriptState.passwordMode === 'pin' ? 'Parent PIN' : 'School ID';
+  const targetEmail = activeTranscriptState.recipient === 'student' ? student.email : (activeTranscriptState.recipient === 'guardian' ? student.parent.email : `${student.email}, ${student.parent.email}`);
+  const emailSubject = `Official Report of Grades - ${student.name}`;
+  const emailBody = `Good day,\n\nAttached is the password-protected report of grades for ${student.name} (${student.section}). To open the PDF document, please use your secure ${passLabel}: ${passVal}.\n\n${activeTranscriptState.note ? 'Teacher Note: ' + activeTranscriptState.note + '\n\n' : ''}*** This is an auto-generated email. DO NOT REPLY TO THIS MESSAGE ***`;
 
-  const emailBody = `Good day,\n\nAttached is the password-protected report of grades for ${student.name} (${student.section}). To open the PDF document, please use your secure ${passLabel}: ${passVal}.\n\n*** This is an auto-generated email. DO NOT REPLY TO THIS MESSAGE ***`;
-
+  // Update the href attribute directly on the DOM element
+  const gmailBtn = document.getElementById('btnGmailDraft');
+  if (gmailBtn) {
+    gmailBtn.href = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(targetEmail)}&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+  }
   modalRoot.innerHTML = `
     <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm overflow-y-auto">
       <div class="glass-panel w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -1690,12 +1695,12 @@ function renderTranscriptModal() {
           </div>
         </div>
 
-        <div class="flex items-center justify-end gap-3 p-6 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40">
+          <div class="flex items-center justify-end gap-3 p-6 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40">
           <button type="button" onclick="closeTranscriptModal()" class="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs">Cancel</button>
           <button type="button" onclick="dispatchTranscriptAndPDF()" class="px-4 py-2.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs transition-all">
             📥 Download PDF
           </button>
-          <a href="https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(targetEmail)}&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}" target="_blank" rel="noopener noreferrer" class="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2">
+          <a id="btnGmailDraft" href="#" target="_blank" rel="noopener noreferrer" class="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2">
             <span>✉️ Open Gmail Web Draft</span>
           </a>
         </div>
