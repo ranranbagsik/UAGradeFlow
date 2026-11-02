@@ -1,8 +1,8 @@
 /* ==========================================================================
    1. DATA MODELS & LOCAL STORAGE MANAGEMENT
    ========================================================================== */
-const STORAGE_KEY = 'ua_gradeflow_v5_store';
-const AUTH_KEY = 'ua_gradeflow_v5_auth';
+const STORAGE_KEY = 'ua_gradeflow_v6_store';
+const AUTH_KEY = 'ua_gradeflow_v6_auth';
 
 const COURSES = [
   { code: 'BSIT', name: 'BS Information Technology' },
@@ -127,7 +127,7 @@ function resetStateToDefault() {
 }
 
 /* ==========================================================================
-   2. ACADEMIC EVALUATION (PRELIM, MIDTERM, FINAL)
+   2. ACADEMIC EVALUATION (PRELIM, MIDTERM, PRE-FINAL)
    ========================================================================== */
 function pctToEquiv(pct) {
   if (pct === null || pct === undefined) return null;
@@ -146,15 +146,15 @@ function pctToEquiv(pct) {
 
 function calculateSubjectGrade(gradeRecord) {
   if (!gradeRecord) return { status: 'none', pct: null, eq: null };
-  const { p, m, f } = gradeRecord;
+  const { p, m, pf } = gradeRecord;
   const hasP = p !== null && p !== undefined && p !== '';
   const hasM = m !== null && m !== undefined && m !== '';
-  const hasF = f !== null && f !== undefined && f !== '';
+  const hasPF = pf !== null && pf !== undefined && pf !== '';
 
-  if (!hasP && !hasM && !hasF) return { status: 'none', pct: null, eq: null };
-  if (!hasP || !hasM || !hasF) return { status: 'inc', pct: null, eq: null };
+  if (!hasP && !hasM && !hasPF) return { status: 'none', pct: null, eq: null };
+  if (!hasP || !hasM || !hasPF) return { status: 'inc', pct: null, eq: null };
 
-  const pct = (parseFloat(p) + parseFloat(m) + parseFloat(f)) / 3;
+  const pct = (parseFloat(p) + parseFloat(m) + parseFloat(pf)) / 3;
   const eq = pctToEquiv(pct);
   return { status: eq <= 3.00 ? 'passed' : 'failed', pct, eq };
 }
@@ -214,7 +214,7 @@ function downloadCSVTemplate(sectionId) {
   
   let csvContent = `School ID,Student Name,Course,Section,Student Email,Guardian Name,Guardian Email,Guardian PIN`;
   sectionSubjects.forEach(sub => {
-    csvContent += `,${sub.code}_Prelim,${sub.code}_Midterm,${sub.code}_Final`;
+    csvContent += `,${sub.code}_Prelim,${sub.code}_Midterm,${sub.code}_PreFinal`;
   });
   csvContent += `\n`;
 
@@ -249,15 +249,15 @@ function exportSectionToCSV(sectionId) {
 
   let csvContent = `School ID,Student Name,Course,Section,Student Email,Guardian Name,Guardian Email,Guardian PIN`;
   sectionSubjects.forEach(sub => {
-    csvContent += `,${sub.code}_Prelim,${sub.code}_Midterm,${sub.code}_Final`;
+    csvContent += `,${sub.code}_Prelim,${sub.code}_Midterm,${sub.code}_PreFinal`;
   });
   csvContent += `\n`;
 
   sectionStudents.forEach(st => {
     let row = `"${st.id}","${st.name}","${st.course}","${st.section}","${st.email}","${st.parent.name}","${st.parent.email}","${st.parent.pin}"`;
     sectionSubjects.forEach(sub => {
-      const g = (appState.grades[st.id] || {})[sub.id] || { p: '', m: '', f: '' };
-      row += `,${g.p ?? ''},${g.m ?? ''},${g.f ?? ''}`;
+      const g = (appState.grades[st.id] || {})[sub.id] || { p: '', m: '', pf: '' };
+      row += `,${g.p ?? ''},${g.m ?? ''},${g.pf ?? ''}`;
     });
     csvContent += row + `\n`;
   });
@@ -329,16 +329,16 @@ function parseAndImportCSV(csvText, sectionId) {
     sectionSubjects.forEach(sub => {
       const pIdx = headers.indexOf(`${sub.code}_Prelim`);
       const mIdx = headers.indexOf(`${sub.code}_Midterm`);
-      const fIdx = headers.indexOf(`${sub.code}_Final`);
+      const pfIdx = headers.indexOf(`${sub.code}_PreFinal`);
 
       const pVal = pIdx !== -1 && cols[pIdx] !== '' ? parseFloat(cols[pIdx]) : null;
       const mVal = mIdx !== -1 && cols[mIdx] !== '' ? parseFloat(cols[mIdx]) : null;
-      const fVal = fIdx !== -1 && cols[fIdx] !== '' ? parseFloat(cols[fIdx]) : null;
+      const pfVal = pfIdx !== -1 && cols[pfIdx] !== '' ? parseFloat(cols[pfIdx]) : null;
 
       appState.grades[id][sub.id] = {
         p: isNaN(pVal) ? null : pVal,
         m: isNaN(mVal) ? null : mVal,
-        f: isNaN(fVal) ? null : fVal
+        pf: isNaN(pfVal) ? null : pfVal
       };
     });
 
@@ -537,7 +537,7 @@ function handleStudentLogin(e) {
 }
 
 /* ==========================================================================
-   6. MAIN NAVIGATION & LAYOUT
+   6. MAIN NAVIGATION & LAYOUT (WITH ANIMATED MOBILE DRAWER)
    ========================================================================== */
 function renderMainLayout() {
   const isTeacher = authUser.role === 'teacher';
@@ -568,7 +568,7 @@ function renderMainLayout() {
         </button>
       </div>
 
-      <!-- Sidebar Drawer with Animation & Close Button -->
+      <!-- Animated Sidebar Drawer -->
       <aside id="appSidebar" class="mobile-closed md:flex md:w-64 glass-sidebar flex-col justify-between p-4 flex-shrink-0 shadow-2xl">
         <div class="space-y-6">
           <div class="flex items-center justify-between px-2">
@@ -586,7 +586,7 @@ function renderMainLayout() {
 
           <nav class="space-y-1">
             ${navItems.map(item => `
-              <button type="button" onclick="switchPage('${item.id}'); toggleMobileMenu();" 
+              <button type="button" onclick="switchPage('${item.id}'); if(window.innerWidth < 768) toggleMobileMenu();" 
                 class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl font-semibold text-xs transition-all ${uiState.activePage === item.id ? 'bg-brand-500 text-white shadow-md shadow-brand-500/20' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800'}">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">${item.icon}</svg>
                 <span>${item.label}</span>
@@ -632,6 +632,11 @@ function renderMainLayout() {
   `;
 }
 
+function switchPage(pageId) {
+  uiState.activePage = pageId;
+  renderApp();
+}
+
 function toggleMobileMenu() {
   const sidebar = document.getElementById('appSidebar');
   if (sidebar) {
@@ -643,11 +648,6 @@ function toggleMobileMenu() {
       sidebar.classList.add('mobile-closed');
     }
   }
-}
-
-function switchPage(pageId) {
-  uiState.activePage = pageId;
-  renderApp();
 }
 
 function renderActivePage() {
@@ -824,7 +824,7 @@ function updateDashFilterSection(val) {
 }
 
 /* ==========================================================================
-   8. GRADE ENTRY PAGE (3-TERM)
+   8. GRADE ENTRY PAGE (PRELIM, MIDTERM, PRE-FINAL)
    ========================================================================== */
 function renderGradeEntryPage() {
   const courseSubjects = appState.subjects.filter(s => s.course === uiState.entryFilter.course);
@@ -840,7 +840,7 @@ function renderGradeEntryPage() {
       <div class="glass-panel p-6 rounded-2xl space-y-4">
         <div>
           <h1 class="text-xl font-black text-slate-800 dark:text-slate-100">3–Term Grade Entry Matrix</h1>
-          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Input raw numerical scores (0–100) for Prelim, Midterm, and Final.</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Input raw numerical scores (0–100) for Prelim, Midterm, and Pre-Final.</p>
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -898,7 +898,7 @@ function renderGradeEntryPage() {
                   <th class="py-3 px-4">Student Name</th>
                   <th class="py-3 px-4 w-28">Prelim</th>
                   <th class="py-3 px-4 w-28">Midterm</th>
-                  <th class="py-3 px-4 w-28">Final</th>
+                  <th class="py-3 px-4 w-28">Pre-Final</th>
                   <th class="py-3 px-4 text-center">Average %</th>
                   <th class="py-3 px-4 text-center">Equiv Grade</th>
                   <th class="py-3 px-4 text-center">Status</th>
@@ -907,7 +907,7 @@ function renderGradeEntryPage() {
               </thead>
               <tbody class="divide-y divide-slate-100 dark:divide-slate-800/60">
                 ${sectionStudents.map(st => {
-                  const g = (appState.grades[st.id] || {})[activeSub.id] || { p: '', m: '', f: '' };
+                  const g = (appState.grades[st.id] || {})[activeSub.id] || { p: '', m: '', pf: '' };
                   const calc = calculateSubjectGrade(g);
                   const statusColors = {
                     passed: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
@@ -928,7 +928,7 @@ function renderGradeEntryPage() {
                         <input type="number" min="0" max="100" step="0.1" value="${g.m !== null && g.m !== undefined ? g.m : ''}" onchange="updateGradeScore('${st.id}', '${activeSub.id}', 'm', this.value)" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 font-mono text-xs text-center focus:outline-none focus:border-amber-400" />
                       </td>
                       <td class="py-3 px-4">
-                        <input type="number" min="0" max="100" step="0.1" value="${g.f !== null && g.f !== undefined ? g.f : ''}" onchange="updateGradeScore('${st.id}', '${activeSub.id}', 'f', this.value)" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 font-mono text-xs text-center focus:outline-none focus:border-amber-400" />
+                        <input type="number" min="0" max="100" step="0.1" value="${g.pf !== null && g.pf !== undefined ? g.pf : ''}" onchange="updateGradeScore('${st.id}', '${activeSub.id}', 'pf', this.value)" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 font-mono text-xs text-center focus:outline-none focus:border-amber-400" />
                       </td>
                       <td class="py-3 px-4 text-center font-mono font-semibold">${calc.pct !== null ? calc.pct.toFixed(1) + '%' : '-'}</td>
                       <td class="py-3 px-4 text-center font-mono font-black text-brand-600 dark:text-amber-400">${formatGradeEq(calc.eq)}</td>
@@ -979,7 +979,7 @@ function updateEntrySearch(val) {
 
 function updateGradeScore(studentId, subjectId, termKey, val) {
   if (!appState.grades[studentId]) appState.grades[studentId] = {};
-  if (!appState.grades[studentId][subjectId]) appState.grades[studentId][subjectId] = { p: null, m: null, f: null };
+  if (!appState.grades[studentId][subjectId]) appState.grades[studentId][subjectId] = { p: null, m: null, pf: null };
   
   const num = val === '' ? null : parseFloat(val);
   appState.grades[studentId][subjectId][termKey] = isNaN(num) ? null : num;
@@ -1554,7 +1554,7 @@ function renderStudentDashboard() {
                 <th class="py-3 px-4 text-center">Units</th>
                 <th class="py-3 px-4 text-center">Prelim</th>
                 <th class="py-3 px-4 text-center">Midterm</th>
-                <th class="py-3 px-4 text-center">Final</th>
+                <th class="py-3 px-4 text-center">Pre-Final</th>
                 <th class="py-3 px-4 text-center">Average %</th>
                 <th class="py-3 px-4 text-center">Grade</th>
                 <th class="py-3 px-4 text-center">Status</th>
@@ -1562,7 +1562,7 @@ function renderStudentDashboard() {
             </thead>
             <tbody class="divide-y divide-slate-100 dark:divide-slate-800/60">
               ${sm.rows.map(r => {
-                const g = r.g || { p: '-', m: '-', f: '-' };
+                const g = r.g || { p: '-', m: '-', pf: '-' };
                 return `
                   <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
                     <td class="py-3 px-4 font-mono font-bold text-brand-600 dark:text-amber-400">${r.sub.code}</td>
@@ -1570,7 +1570,7 @@ function renderStudentDashboard() {
                     <td class="py-3 px-4 text-center font-mono">${r.sub.units}</td>
                     <td class="py-3 px-4 text-center font-mono">${g.p ?? '-'}</td>
                     <td class="py-3 px-4 text-center font-mono">${g.m ?? '-'}</td>
-                    <td class="py-3 px-4 text-center font-mono">${g.f ?? '-'}</td>
+                    <td class="py-3 px-4 text-center font-mono">${g.pf ?? '-'}</td>
                     <td class="py-3 px-4 text-center font-mono font-semibold">${r.calc.pct !== null ? r.calc.pct.toFixed(1) + '%' : '-'}</td>
                     <td class="py-3 px-4 text-center font-mono font-black text-brand-600 dark:text-amber-400">${formatGradeEq(r.calc.eq)}</td>
                     <td class="py-3 px-4 text-center">
@@ -1692,9 +1692,11 @@ function renderTranscriptModal() {
 
         <div class="flex items-center justify-end gap-3 p-6 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40">
           <button type="button" onclick="closeTranscriptModal()" class="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs">Cancel</button>
-          <button type="button" onclick="dispatchTranscriptAndPDF()" class="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-            <span>Send Email & Download PDF</span>
+          <button type="button" onclick="dispatchTranscriptAndPDF()" class="px-4 py-2.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs transition-all">
+            📥 Download PDF
+          </button>
+          <button type="button" onclick="openOutlookWebDraft()" class="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2">
+            <span>✉️ Open Outlook Web Draft</span>
           </button>
         </div>
       </div>
@@ -1803,18 +1805,21 @@ function dispatchTranscriptAndPDF() {
     file: filename
   });
   saveState();
+  renderApp();
+  showToast('PDF Transcript downloaded successfully!', 'success');
+}
 
+function openOutlookWebDraft() {
+  const st = appState.students.find(s => s.id === activeTranscriptState.studentId);
+  const password = activeTranscriptState.passwordMode === 'pin' ? st.parent.pin : st.id;
+  const passLabel = activeTranscriptState.passwordMode === 'pin' ? 'Parent PIN' : 'School ID';
   const targetEmail = activeTranscriptState.recipient === 'student' ? st.email : (activeTranscriptState.recipient === 'guardian' ? st.parent.email : st.parent.email);
+  
   const emailSubject = `Official Report of Grades - ${st.name}`;
   const emailBody = `Good day,\n\nAttached is the password-protected report of grades for ${st.name} (${st.section}). To open the PDF document, please use your secure ${passLabel}: ${password}.\n\n${activeTranscriptState.note ? 'Teacher Note: ' + activeTranscriptState.note + '\n\n' : ''}*** This is an auto-generated email. DO NOT REPLY TO THIS MESSAGE ***`;
 
-  // Open Gmail Web directly in a new tab with pre-filled fields
-  const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(targetEmail)}&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
-  window.open(gmailUrl, '_blank');
-
-  closeTranscriptModal();
-  renderApp();
-  showToast('PDF downloaded & Gmail Web opened in new tab!', 'success');
+  const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(targetEmail)}&subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+  window.open(outlookUrl, '_blank');
 }
 
 /* ==========================================================================
