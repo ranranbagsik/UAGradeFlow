@@ -1627,14 +1627,15 @@ function renderTranscriptModal() {
     return;
   }
   
-  // Compute student summary here so 'sm' is available for the template
   const sm = getStudentSummary(student);
 
   const passVal = activeTranscriptState.passwordMode === 'pin' ? student.parent.pin : student.id;
   const passLabel = activeTranscriptState.passwordMode === 'pin' ? 'Parent PIN' : 'School ID';
   const targetEmail = activeTranscriptState.recipient === 'student' ? student.email : (activeTranscriptState.recipient === 'guardian' ? student.parent.email : `${student.email}, ${student.parent.email}`);
 
-  const emailBody = `Good day,\n\nAttached is the password-protected report of grades for ${student.name} (${student.section}). To open the PDF document, please use your secure ${passLabel}: ${passVal}.\n\n*** This is an auto-generated email. DO NOT REPLY TO THIS MESSAGE ***`;
+  // Declare emailSubject and emailBody here BEFORE the template string
+  const emailSubject = `Official Report of Grades - ${student.name}`;
+  const emailBody = `Good day,\n\nAttached is the password-protected report of grades for ${student.name} (${student.section}). To open the PDF document, please use your secure ${passLabel}: ${passVal}.\n\n${activeTranscriptState.note ? 'Teacher Note: ' + activeTranscriptState.note + '\n\n' : ''}*** This is an auto-generated email. DO NOT REPLY TO THIS MESSAGE ***`;
 
   modalRoot.innerHTML = `
     <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm overflow-y-auto">
@@ -1683,7 +1684,7 @@ function renderTranscriptModal() {
                 </div>
                 <div class="text-slate-400">Sender: <span class="text-white">universityoftheassumptiongrades@ua.edu.ph</span></div>
                 <div class="text-slate-400">To: <span class="text-white">${targetEmail}</span></div>
-                <div class="text-slate-400 pt-1 border-t border-slate-800">Subject: Official Report of Grades - ${student.name} (${appState.settings.term})</div>
+                <div class="text-slate-400 pt-1 border-t border-slate-800">Subject: ${emailSubject}</div>
                 <div class="bg-slate-950 p-3 rounded-xl text-slate-300 whitespace-pre-line mt-2 text-[11px] leading-relaxed border border-slate-800/80">${emailBody}</div>
               </div>
               <button type="button" onclick="copyEmailDraftText('${targetEmail.replace(/'/g, "\\'")}', '${emailBody.replace(/'/g, "\\'").replace(/\n/g, '\\n')}')" class="w-full py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all">
