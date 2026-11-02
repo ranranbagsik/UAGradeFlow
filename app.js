@@ -1704,15 +1704,15 @@ function renderTranscriptModal() {
           </div>
         </div>
 
-        <div class="flex items-center justify-end gap-3 p-6 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40">
-          <button type="button" onclick="closeTranscriptModal()" class="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs">Cancel</button>
-          <button type="button" onclick="dispatchTranscriptAndPDF()" class="px-4 py-2.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs transition-all">
-            📥 Download PDF
-          </button>
-          <a href="https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(targetEmail)}&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}" target="_blank" rel="noopener noreferrer" class="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2">
-            <span>✉️ Open Gmail Web Draft</span>
-          </a>
-        </div>
+           <div class="flex items-center justify-end gap-3 p-6 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40">
+              <button type="button" onclick="closeTranscriptModal()" class="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs">Cancel</button>
+              <button type="button" onclick="dispatchTranscriptAndPDF()" class="px-4 py-2.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs transition-all">
+                📥 Download PDF
+           </button>
+              <a href="https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(targetEmail)}&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}" target="_blank" rel="noopener noreferrer" onclick="dispatchTranscriptAndPDF()" class="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2">
+                <span>✉️ Download PDF & Open Gmail</span>
+              </a>
+         </div>
       </div>
     </div>
   `;
