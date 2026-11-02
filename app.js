@@ -556,9 +556,9 @@ function renderMainLayout() {
   ];
 
   return `
-    <div class="flex flex-col md:flex-row h-screen overflow-hidden">
+    <div class="flex flex-col md:flex-row h-screen overflow-hidden relative">
       <!-- Mobile Top Navigation Bar -->
-      <div class="md:hidden flex items-center justify-between p-4 glass-sidebar border-b border-slate-800 flex-shrink-0">
+      <div class="md:hidden flex items-center justify-between p-4 glass-sidebar border-b border-slate-800 flex-shrink-0 z-20">
         <div class="flex items-center gap-2">
           ${getUASealSVG("w-7 h-7")}
           <h2 class="font-black text-xs text-brand-500 dark:text-amber-400">UA GradeFlow</h2>
@@ -568,20 +568,25 @@ function renderMainLayout() {
         </button>
       </div>
 
-      <!-- Sidebar (Hidden on mobile by default, togglable) -->
-      <aside id="appSidebar" class="hidden md:flex w-full md:w-64 glass-sidebar flex-col justify-between p-4 flex-shrink-0 z-30">
+      <!-- Sidebar Drawer with Animation & Close Button -->
+      <aside id="appSidebar" class="mobile-closed md:flex md:w-64 glass-sidebar flex-col justify-between p-4 flex-shrink-0 shadow-2xl">
         <div class="space-y-6">
-          <div class="flex items-center gap-3 px-2">
-            ${getUASealSVG("w-9 h-9")}
-            <div>
-              <h2 class="font-black text-sm text-brand-500 dark:text-amber-400 leading-tight">UA GradeFlow</h2>
-              <p class="text-[10px] text-slate-500 dark:text-slate-400 font-semibold uppercase">Academic System</p>
+          <div class="flex items-center justify-between px-2">
+            <div class="flex items-center gap-3">
+              ${getUASealSVG("w-9 h-9")}
+              <div>
+                <h2 class="font-black text-sm text-brand-500 dark:text-amber-400 leading-tight">UA GradeFlow</h2>
+                <p class="text-[10px] text-slate-500 dark:text-slate-400 font-semibold uppercase">Academic System</p>
+              </div>
             </div>
+            <button type="button" onclick="toggleMobileMenu()" class="md:hidden p-2 rounded-xl text-slate-400 hover:text-white bg-slate-800/80">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
           </div>
 
           <nav class="space-y-1">
             ${navItems.map(item => `
-              <button type="button" onclick="switchPage('${item.id}')" 
+              <button type="button" onclick="switchPage('${item.id}'); toggleMobileMenu();" 
                 class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl font-semibold text-xs transition-all ${uiState.activePage === item.id ? 'bg-brand-500 text-white shadow-md shadow-brand-500/20' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800'}">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">${item.icon}</svg>
                 <span>${item.label}</span>
@@ -630,13 +635,13 @@ function renderMainLayout() {
 function toggleMobileMenu() {
   const sidebar = document.getElementById('appSidebar');
   if (sidebar) {
-    sidebar.classList.toggle('hidden');
-    sidebar.classList.toggle('flex');
-    sidebar.classList.toggle('absolute');
-    sidebar.classList.toggle('inset-y-0');
-    sidebar.classList.toggle('left-0');
-    sidebar.classList.toggle('z-50');
-    sidebar.classList.toggle('h-full');
+    if (sidebar.classList.contains('mobile-closed')) {
+      sidebar.classList.remove('mobile-closed');
+      sidebar.classList.add('mobile-open');
+    } else {
+      sidebar.classList.remove('mobile-open');
+      sidebar.classList.add('mobile-closed');
+    }
   }
 }
 
