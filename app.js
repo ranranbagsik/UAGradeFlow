@@ -1595,17 +1595,22 @@ function renderStudentDashboard() {
 let activeTranscriptState = null;
 
 function openTranscriptModal(studentId) {
-  const student = appState.students.find(s => s.id === studentId);
+  console.log("Opening transcript modal for student ID:", studentId);
+  const student = appState.students.find(s => String(s.id) === String(studentId));
+  
   if (!student) {
-    showToast('Student record not found.', 'error');
+    showToast('Student record not found for ID: ' + studentId, 'error');
+    console.error("Student not found in appState.students:", studentId, appState.students);
     return;
   }
+
   activeTranscriptState = {
-    studentId,
+    studentId: student.id,
     recipient: 'guardian',
     passwordMode: 'pin',
     note: ''
   };
+
   renderTranscriptModal();
 }
 
