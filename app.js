@@ -1818,8 +1818,8 @@ function openGmailWebDraft() {
   const emailSubject = `Official Report of Grades - ${st.name}`;
   const emailBody = `Good day,\n\nAttached is the password-protected report of grades for ${st.name} (${st.section}). To open the PDF document, please use your secure ${passLabel}: ${password}.\n\n${activeTranscriptState.note ? 'Teacher Note: ' + activeTranscriptState.note + '\n\n' : ''}*** This is an auto-generated email. DO NOT REPLY TO THIS MESSAGE ***`;
 
-  const gmailUrl = `https://mail.google.com/mail/u/0/#inbox?compose?to=${encodeURIComponent(targetEmail)}&subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
-  window.open(gmailUrl, '_blank');
+const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(targetEmail)}&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+window.open(gmailUrl, '_blank');
 }
 
 /* ==========================================================================
