@@ -1596,15 +1596,16 @@ let activeTranscriptState = null;
 
 function openTranscriptModal(studentId) {
   const student = appState.students.find(s => s.id === studentId);
-  if (!student) return;
-
+  if (!student) {
+    showToast('Student record not found.', 'error');
+    return;
+  }
   activeTranscriptState = {
     studentId,
     recipient: 'guardian',
     passwordMode: 'pin',
     note: ''
   };
-
   renderTranscriptModal();
 }
 
