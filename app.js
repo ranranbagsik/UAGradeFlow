@@ -66,11 +66,12 @@ function generateCleanStateData() {
       school: 'University of the Assumption',
       registrar: 'Prof. Mark Anthony Madalipay',
       term: '1st Semester, A.Y. 2026-2027',
-      weights: { quiz: 40, activity: 40, attendance: 20 }
+      weights: { quiz: 30, activity: 30, exam: 30, attendance: 10 }
     },
     subjects: generateSubjectsSeed(),
     courses: [...COURSES],
     sections: [...SECTIONS],
+    classwork: {},
     teachers: [
       { username: 'markanthonymadalipay', password: 'madd79', name: 'Prof. Mark Anthony Madalipay', email: 'mark.madalipay@ua.edu.ph' }
     ],
@@ -92,7 +93,10 @@ function loadState() {
         if (!parsed.courses) parsed.courses = [...COURSES];
         if (!parsed.sections) parsed.sections = [...SECTIONS];
         if (!parsed.settings) parsed.settings = generateCleanStateData().settings;
-        if (!parsed.settings.weights) parsed.settings.weights = { quiz: 40, activity: 40, attendance: 20 };
+        if (!parsed.settings.weights || parsed.settings.weights.exam === undefined) {
+          parsed.settings.weights = { quiz: 30, activity: 30, exam: 30, attendance: 10 };
+        }
+        if (!parsed.classwork) parsed.classwork = {};
         if (!parsed.teachers || !parsed.teachers.length) parsed.teachers = generateCleanStateData().teachers;
         parsed.students.forEach(st => {
           if (!st.password) st.password = String(100000 + Math.floor(Math.random() * 900000));
@@ -140,19 +144,33 @@ function resetStateToDefault() {
 }
 
 /* ==========================================================================
-   2b. TERM GRADE COMPONENTS (QUIZZES, ACTIVITIES, ATTENDANCE)
-   Each term grade = Quizzes% x w1 + Activities% x w2 + Attendance% x w3
-   Stored per student/subject: record.comp[term] = { qs, qt, acs, act, ap, ad }
-     qs/qt  = quiz score / quiz total points
-     acs/act = activity score / activity total points
-     ap/ad  = days present / total class days
+   2b. ITEMIZED CLASS RECORD
+   Per section + subject + term the teacher records:
+     - Quizzes     (name + total points)
+     - Activities  (name + total points)
+     - Exam        (total points)
+     - Attendance  (class dates)
+   Each student then gets a score per item and a status per date.
+     Quizzes %    = total score / total points of recorded quizzes
+     Activities % = total score / total points of recorded activities
+     Exam %       = exam score / exam points
+     Attendance % = (Present + Late) / (Present + Late + Absent)   [Excused is not counted]
+     Term grade   = weighted sum using the weights in Portal Settings
+   Storage:
+     appState.classwork["SECTION|SUBJECT-ID|term"] = { quizzes, activities, exam, dates }
+     appState.grades[studentId][subjectId] = { p, m, pf, items: {itemId: score}, att: {dateId: 'P'|'L'|'A'|'E'}, auto: {term:true} }
    ========================================================================== */
 const TERMS = [
   { key: 'p', label: 'Prelim' },
   { key: 'm', label: 'Midterm' },
   { key: 'pf', label: 'Pre-Final' }
 ];
-const COMP_PAIRS = [['qs', 'qt'], ['acs', 'act'], ['ap', 'ad']];
+const ATT_STATUS = {
+  P: { label: 'Present', tone: 'pass' },
+  L: { label: 'Late', tone: 'warn' },
+  A: { label: 'Absent', tone: 'fail' },
+  E: { label: 'Excused', tone: 'muted' }
+};
 
 function isTeacherSession() {
   return !!(authUser && authUser.role === 'teacher');
@@ -161,38 +179,106 @@ function isTeacherSession() {
 function getWeights() {
   const w = (appState.settings && appState.settings.weights) || {};
   const n = (v, d) => (v === undefined || v === null || isNaN(parseFloat(v))) ? d : parseFloat(v);
-  return { quiz: n(w.quiz, 40), activity: n(w.activity, 40), attendance: n(w.attendance, 20) };
+  return { quiz: n(w.quiz, 30), activity: n(w.activity, 30), exam: n(w.exam, 30), attendance: n(w.attendance, 10) };
 }
 
-function ratioPct(score, total) {
+function hasVal(v) {
+  return v !== undefined && v !== null && v !== '';
+}
+
+function pctOf(score, total) {
   const x = parseFloat(score), y = parseFloat(total);
   if (isNaN(x) || isNaN(y) || y <= 0) return null;
   return Math.max(0, Math.min(100, (x / y) * 100));
 }
 
-function calcComponents(c) {
-  c = c || {};
-  return { q: ratioPct(c.qs, c.qt), a: ratioPct(c.acs, c.act), att: ratioPct(c.ap, c.ad) };
+function newItemId(prefix) {
+  return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
-function calcTermGrade(c) {
-  const { q, a, att } = calcComponents(c);
-  if (q === null || a === null || att === null) return null;
-  const w = getWeights();
-  const total = (w.quiz + w.activity + w.attendance) || 100;
-  return (q * w.quiz + a * w.activity + att * w.attendance) / total;
+function fmtDate(d) {
+  try {
+    return new Date(d + 'T00:00:00').toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch (e) { return d; }
+}
+
+function getClassWork(section, subjectId, termKey, create) {
+  if (!appState.classwork) appState.classwork = {};
+  const k = `${section}|${subjectId}|${termKey}`;
+  if (!appState.classwork[k]) {
+    const empty = { quizzes: [], activities: [], exam: null, dates: [] };
+    if (!create) return empty;
+    appState.classwork[k] = empty;
+  }
+  return appState.classwork[k];
+}
+
+function computeTermBreakdown(student, subjectId, termKey) {
+  const cw = getClassWork(student.section, subjectId, termKey, false);
+  const rec = (appState.grades[student.id] || {})[subjectId] || {};
+  const items = rec.items || {};
+  const att = rec.att || {};
+
+  const sumList = list => {
+    let sc = 0, tt = 0, n = 0;
+    list.forEach(it => {
+      if (hasVal(items[it.id])) { sc += parseFloat(items[it.id]); tt += it.total; n++; }
+    });
+    return tt > 0 ? { pct: Math.max(0, Math.min(100, (sc / tt) * 100)), score: sc, total: tt, n } : null;
+  };
+  const quiz = sumList(cw.quizzes);
+  const act = sumList(cw.activities);
+
+  let exam = null;
+  if (cw.exam && cw.exam.total > 0 && hasVal(items[cw.exam.id])) {
+    exam = { pct: pctOf(items[cw.exam.id], cw.exam.total), score: parseFloat(items[cw.exam.id]), total: cw.exam.total };
+  }
+
+  let present = 0, late = 0, absent = 0, excused = 0;
+  cw.dates.forEach(d => {
+    const st = att[d.id];
+    if (st === 'P') present++;
+    else if (st === 'L') late++;
+    else if (st === 'A') absent++;
+    else if (st === 'E') excused++;
+  });
+  const counted = present + late + absent;
+  const attPct = counted > 0 ? ((present + late) / counted) * 100 : null;
+
+  // The term grade needs all four parts to have at least one recorded value
+  let term = null;
+  if (quiz && act && exam && attPct !== null) {
+    const w = getWeights();
+    const totalW = (w.quiz + w.activity + w.exam + w.attendance) || 100;
+    term = (quiz.pct * w.quiz + act.pct * w.activity + exam.pct * w.exam + attPct * w.attendance) / totalW;
+  }
+
+  return { cw, quiz, act, exam, attendance: { pct: attPct, present, late, absent, excused, counted }, term };
+}
+
+function syncTermGrade(student, subjectId, termKey) {
+  const bd = computeTermBreakdown(student, subjectId, termKey);
+  if (!appState.grades[student.id]) appState.grades[student.id] = {};
+  let rec = appState.grades[student.id][subjectId];
+  if (bd.term !== null) {
+    if (!rec) rec = appState.grades[student.id][subjectId] = { p: null, m: null, pf: null };
+    if (!rec.auto) rec.auto = {};
+    rec[termKey] = bd.term;
+    rec.auto[termKey] = true;
+  } else if (rec && rec.auto && rec.auto[termKey]) {
+    rec[termKey] = null;
+    delete rec.auto[termKey];
+  }
+}
+
+function syncClass(section, subjectId, termKey) {
+  appState.students.filter(st => st.section === section).forEach(st => syncTermGrade(st, subjectId, termKey));
 }
 
 function recomputeAllTermGrades() {
-  Object.keys(appState.grades).forEach(sid => {
-    const subs = appState.grades[sid] || {};
-    Object.keys(subs).forEach(subId => {
-      const rec = subs[subId];
-      if (!rec || !rec.comp) return;
-      TERMS.forEach(t => {
-        const tg = calcTermGrade(rec.comp[t.key]);
-        if (tg !== null) rec[t.key] = tg;
-      });
+  appState.students.forEach(st => {
+    appState.subjects.filter(sub => sub.course === st.course).forEach(sub => {
+      TERMS.forEach(t => syncTermGrade(st, sub.id, t.key));
     });
   });
 }
@@ -421,8 +507,8 @@ function parseAndImportCSV(csvText, sectionId) {
         if (nv !== null && (cur === null || cur === undefined || Math.abs(cur - nv) > 0.05)) {
           // A different grade was imported: it replaces any computed components for that term
           rec[t.key] = nv;
-          if (rec.comp) delete rec.comp[t.key];
-        } else if (nv === null && (rec.comp === undefined || !rec.comp[t.key])) {
+          if (rec.auto) delete rec.auto[t.key];
+        } else if (nv === null && !(rec.auto && rec.auto[t.key])) {
           rec[t.key] = null;
         }
       });
@@ -443,8 +529,9 @@ function parseAndImportCSV(csvText, sectionId) {
 const uiState = {
   activePage: 'dashboard',
   dashFilter: { course: 'all', section: 'all' },
-  entryFilter: { course: 'BSIT', section: 'BSIT-1A', subject: 'BSIT-IT101', search: '', term: 'p' },
+  entryFilter: { course: 'BSIT', section: 'BSIT-1A', subject: 'BSIT-IT101', search: '', term: 'p', view: 'summary' },
   studentTerm: 'p',
+  studentSubject: '',
   studentsSectionFilter: 'BSIT-1A',
   studentsSearch: '',
   teacherPasswordVisible: false,
@@ -929,24 +1016,262 @@ function renderGradeEntryPage() {
   const courseSubjects = appState.subjects.filter(s => s.course === uiState.entryFilter.course);
   const activeSub = courseSubjects.find(s => s.id === uiState.entryFilter.subject) || courseSubjects[0];
   const term = uiState.entryFilter.term || 'p';
+  const view = uiState.entryFilter.view || 'summary';
   const termLabel = (TERMS.find(t => t.key === term) || TERMS[0]).label;
   const w = getWeights();
   const sectionStudents = appState.students.filter(s => s.section === uiState.entryFilter.section && (
-    !uiState.entryFilter.search || 
-    s.name.toLowerCase().includes(uiState.entryFilter.search.toLowerCase()) || 
+    !uiState.entryFilter.search ||
+    s.name.toLowerCase().includes(uiState.entryFilter.search.toLowerCase()) ||
     s.id.includes(uiState.entryFilter.search)
   ));
+  const cw = activeSub ? getClassWork(uiState.entryFilter.section, activeSub.id, term, false) : null;
 
-  const inputCls = 'w-14 px-1.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 font-mono text-xs text-center focus:outline-none focus:border-amber-400';
-  const val = v => (v !== null && v !== undefined ? v : '');
+  const VIEWS = [
+    { key: 'summary', label: 'Summary' },
+    { key: 'quizzes', label: 'Quizzes' },
+    { key: 'activities', label: 'Activities' },
+    { key: 'exam', label: 'Exam' },
+    { key: 'attendance', label: 'Attendance' }
+  ];
+
+  const field = 'px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400';
+  const scoreCls = 'w-16 px-1.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 font-mono text-xs text-center focus:outline-none focus:border-amber-400';
   const pctTxt = v => (v === null || v === undefined ? '-' : v.toFixed(1) + '%');
+
+  const emptyBox = msg => `<div class="text-center py-12 text-slate-500 text-xs">${msg}</div>`;
+
+  // ---------- view bodies ----------
+  const viewBody = () => {
+    if (!activeSub) return emptyBox('Please select a valid subject.');
+    if (sectionStudents.length === 0) {
+      return emptyBox(`No students found in section <b>${uiState.entryFilter.section}</b> matching your search.`);
+    }
+
+    // ----- SUMMARY -----
+    if (view === 'summary') {
+      return `
+        <div id="entryScroll" class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead>
+              <tr class="border-b border-slate-200 dark:border-slate-800 text-slate-400 uppercase font-bold text-[10px]">
+                <th class="py-3 px-3">Student Name</th>
+                <th class="py-3 px-3 text-center">Quizzes</th>
+                <th class="py-3 px-3 text-center">Activities</th>
+                <th class="py-3 px-3 text-center">Exam</th>
+                <th class="py-3 px-3 text-center">Attendance</th>
+                <th class="py-3 px-3 text-center">${termLabel} Grade</th>
+                <th class="py-3 px-3 text-center">Prelim</th>
+                <th class="py-3 px-3 text-center">Midterm</th>
+                <th class="py-3 px-3 text-center">Pre-Final</th>
+                <th class="py-3 px-3 text-center">Avg %</th>
+                <th class="py-3 px-3 text-center">Equiv</th>
+                <th class="py-3 px-3 text-center">Status</th>
+                <th class="py-3 px-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-800/60">
+              ${sectionStudents.map(st => {
+                const rec = (appState.grades[st.id] || {})[activeSub.id] || { p: null, m: null, pf: null };
+                const bd = computeTermBreakdown(st, activeSub.id, term);
+                const calc = calculateSubjectGrade(rec);
+                const statusColors = {
+                  passed: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+                  failed: 'bg-rose-500/10 text-rose-600 dark:text-rose-400',
+                  inc: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+                  none: 'bg-slate-500/10 text-slate-500'
+                };
+                const two = (main, sub) => `<div class="font-mono font-semibold">${main}</div><div class="text-[10px] font-mono text-slate-400">${sub}</div>`;
+                const tv = k => (rec[k] !== null && rec[k] !== undefined ? Number(rec[k]).toFixed(1) : '-');
+                const cell = k => `<td class="py-3 px-3 text-center font-mono ${k === term ? 'font-black text-brand-600 dark:text-amber-400' : ''}">${tv(k)}</td>`;
+                const a = bd.attendance;
+                return `
+                  <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+                    <td class="py-3 px-3">
+                      <div class="font-bold text-slate-800 dark:text-slate-200">${st.name}</div>
+                      <div class="text-[10px] text-slate-400 font-mono">${st.id}</div>
+                    </td>
+                    <td class="py-3 px-3 text-center">${two(pctTxt(bd.quiz && bd.quiz.pct), bd.quiz ? `${bd.quiz.score}/${bd.quiz.total}` : '-')}</td>
+                    <td class="py-3 px-3 text-center">${two(pctTxt(bd.act && bd.act.pct), bd.act ? `${bd.act.score}/${bd.act.total}` : '-')}</td>
+                    <td class="py-3 px-3 text-center">${two(pctTxt(bd.exam && bd.exam.pct), bd.exam ? `${bd.exam.score}/${bd.exam.total}` : '-')}</td>
+                    <td class="py-3 px-3 text-center">${two(pctTxt(a.pct), a.counted || a.excused ? `P${a.present} L${a.late} A${a.absent} E${a.excused}` : '-')}</td>
+                    <td class="py-3 px-3 text-center font-mono font-black text-brand-600 dark:text-amber-400">${rec[term] !== null && rec[term] !== undefined ? Number(rec[term]).toFixed(1) + '%' : '-'}</td>
+                    ${cell('p')}${cell('m')}${cell('pf')}
+                    <td class="py-3 px-3 text-center font-mono font-semibold">${calc.pct !== null ? calc.pct.toFixed(1) + '%' : '-'}</td>
+                    <td class="py-3 px-3 text-center font-mono font-black text-brand-600 dark:text-amber-400">${formatGradeEq(calc.eq)}</td>
+                    <td class="py-3 px-3 text-center">
+                      <span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${statusColors[calc.status]}">${calc.status}</span>
+                    </td>
+                    <td class="py-3 px-3 text-right">
+                      <button type="button" onclick="openTranscriptModal('${st.id}')" class="px-3 py-1.5 rounded-lg bg-brand-500/10 text-brand-600 dark:text-brand-400 hover:bg-brand-500 hover:text-white font-bold transition-all text-xs">PDF</button>
+                    </td>
+                  </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+        <p class="text-[11px] text-slate-500 dark:text-slate-400">A term grade appears once the class has at least one quiz, one activity, the exam and one attendance date recorded for the student. Use the tabs above to enter them.</p>`;
+    }
+
+    // ----- QUIZZES / ACTIVITIES -----
+    if (view === 'quizzes' || view === 'activities') {
+      const list = cw[view];
+      const noun = view === 'quizzes' ? 'Quiz' : 'Activity';
+      return `
+        <form onsubmit="addClassItem(event, '${view}')" class="flex flex-col sm:flex-row gap-3 sm:items-end">
+          <div class="space-y-1 flex-1">
+            <label class="text-xs font-bold text-slate-600 dark:text-slate-400">${noun} name</label>
+            <input type="text" id="newItemName" required placeholder="${noun} ${list.length + 1}" class="w-full ${field}" />
+          </div>
+          <div class="space-y-1 w-full sm:w-32">
+            <label class="text-xs font-bold text-slate-600 dark:text-slate-400">Total points</label>
+            <input type="number" id="newItemTotal" required min="1" step="0.5" placeholder="50" class="w-full ${field} font-mono" />
+          </div>
+          <button type="submit" class="px-5 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs shadow-md transition-all">+ Add ${noun}</button>
+        </form>
+        ${list.length === 0 ? emptyBox(`No ${view} yet for ${termLabel}. Add one above, then enter each student's score.`) : `
+          <div id="entryScroll" class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+              <thead>
+                <tr class="border-b border-slate-200 dark:border-slate-800 text-slate-400 uppercase font-bold text-[10px]">
+                  <th class="py-3 px-3">Student Name</th>
+                  ${list.map(it => `
+                    <th class="py-3 px-3 text-center">
+                      <div class="normal-case text-slate-600 dark:text-slate-300 font-bold">${it.name}</div>
+                      <div class="normal-case font-semibold opacity-70">/ ${it.total} pts</div>
+                      <button type="button" onclick="removeClassItem('${view}', '${it.id}')" class="normal-case text-rose-500 hover:text-rose-700 font-bold">Remove</button>
+                    </th>`).join('')}
+                  <th class="py-3 px-3 text-center">${noun === 'Quiz' ? 'Quizzes' : 'Activities'} %</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100 dark:divide-slate-800/60">
+                ${sectionStudents.map(st => {
+                  const rec = (appState.grades[st.id] || {})[activeSub.id] || {};
+                  const items = rec.items || {};
+                  const bd = computeTermBreakdown(st, activeSub.id, term);
+                  const agg = view === 'quizzes' ? bd.quiz : bd.act;
+                  return `
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+                      <td class="py-3 px-3">
+                        <div class="font-bold text-slate-800 dark:text-slate-200">${st.name}</div>
+                        <div class="text-[10px] text-slate-400 font-mono">${st.id}</div>
+                      </td>
+                      ${list.map(it => `
+                        <td class="py-3 px-3 text-center">
+                          <input id="i_${st.id}_${it.id}" type="number" min="0" max="${it.total}" step="0.5" value="${hasVal(items[it.id]) ? items[it.id] : ''}" onchange="setItemScore('${st.id}', '${activeSub.id}', '${it.id}', this.value, ${it.total})" class="${scoreCls}" />
+                        </td>`).join('')}
+                      <td class="py-3 px-3 text-center font-mono font-black text-brand-600 dark:text-amber-400">${agg ? agg.pct.toFixed(1) + '%' : '-'}</td>
+                    </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>`}`;
+    }
+
+    // ----- EXAM -----
+    if (view === 'exam') {
+      const ex = cw.exam;
+      return `
+        <form onsubmit="setExamTotal(event)" class="flex flex-col sm:flex-row gap-3 sm:items-end">
+          <div class="space-y-1 w-full sm:w-48">
+            <label class="text-xs font-bold text-slate-600 dark:text-slate-400">${termLabel} exam total points</label>
+            <input type="number" id="examTotalInput" required min="1" step="0.5" value="${ex ? ex.total : ''}" placeholder="100" class="w-full ${field} font-mono" />
+          </div>
+          <button type="submit" class="px-5 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs shadow-md transition-all">${ex ? 'Update Total' : '+ Set Exam'}</button>
+          ${ex ? `<button type="button" onclick="removeExam()" class="px-4 py-2.5 rounded-xl bg-rose-500/10 text-rose-600 hover:bg-rose-500 hover:text-white font-bold text-xs transition-all">Remove Exam</button>` : ''}
+        </form>
+        ${!ex ? emptyBox(`No exam set for ${termLabel}. Enter the total points above, then record each student's score.`) : `
+          <div id="entryScroll" class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+              <thead>
+                <tr class="border-b border-slate-200 dark:border-slate-800 text-slate-400 uppercase font-bold text-[10px]">
+                  <th class="py-3 px-3">Student Name</th>
+                  <th class="py-3 px-3 text-center">Exam score<div class="normal-case font-semibold opacity-70">/ ${ex.total} pts</div></th>
+                  <th class="py-3 px-3 text-center">Exam %</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100 dark:divide-slate-800/60">
+                ${sectionStudents.map(st => {
+                  const rec = (appState.grades[st.id] || {})[activeSub.id] || {};
+                  const items = rec.items || {};
+                  const bd = computeTermBreakdown(st, activeSub.id, term);
+                  return `
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+                      <td class="py-3 px-3">
+                        <div class="font-bold text-slate-800 dark:text-slate-200">${st.name}</div>
+                        <div class="text-[10px] text-slate-400 font-mono">${st.id}</div>
+                      </td>
+                      <td class="py-3 px-3 text-center">
+                        <input id="i_${st.id}_${ex.id}" type="number" min="0" max="${ex.total}" step="0.5" value="${hasVal(items[ex.id]) ? items[ex.id] : ''}" onchange="setItemScore('${st.id}', '${activeSub.id}', '${ex.id}', this.value, ${ex.total})" class="${scoreCls}" />
+                      </td>
+                      <td class="py-3 px-3 text-center font-mono font-black text-brand-600 dark:text-amber-400">${bd.exam ? bd.exam.pct.toFixed(1) + '%' : '-'}</td>
+                    </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>`}`;
+    }
+
+    // ----- ATTENDANCE -----
+    const dates = cw.dates;
+    return `
+      <form onsubmit="addAttendanceDate(event)" class="flex flex-col sm:flex-row gap-3 sm:items-end">
+        <div class="space-y-1 w-full sm:w-52">
+          <label class="text-xs font-bold text-slate-600 dark:text-slate-400">Class date</label>
+          <input type="date" id="newAttDate" required class="w-full ${field}" />
+        </div>
+        <button type="submit" class="px-5 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs shadow-md transition-all">+ Add Date</button>
+        <p class="text-[11px] text-slate-500 dark:text-slate-400">P = Present • L = Late (counts as present) • A = Absent • E = Excused (not counted)</p>
+      </form>
+      ${dates.length === 0 ? emptyBox(`No class dates yet for ${termLabel}. Add a date above, then mark each student.`) : `
+        <div id="entryScroll" class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead>
+              <tr class="border-b border-slate-200 dark:border-slate-800 text-slate-400 uppercase font-bold text-[10px]">
+                <th class="py-3 px-3">Student Name</th>
+                ${dates.map(d => `
+                  <th class="py-3 px-3 text-center">
+                    <div class="normal-case text-slate-600 dark:text-slate-300 font-bold">${fmtDate(d.date)}</div>
+                    <button type="button" onclick="markAllPresent('${d.id}')" class="normal-case text-emerald-600 hover:text-emerald-700 font-bold">All present</button>
+                    <span class="opacity-40">•</span>
+                    <button type="button" onclick="removeAttendanceDate('${d.id}')" class="normal-case text-rose-500 hover:text-rose-700 font-bold">Remove</button>
+                  </th>`).join('')}
+                <th class="py-3 px-3 text-center">Attendance %</th>
+                <th class="py-3 px-3 text-center">P / L / A / E</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-800/60">
+              ${sectionStudents.map(st => {
+                const rec = (appState.grades[st.id] || {})[activeSub.id] || {};
+                const att = rec.att || {};
+                const a = computeTermBreakdown(st, activeSub.id, term).attendance;
+                return `
+                  <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+                    <td class="py-3 px-3">
+                      <div class="font-bold text-slate-800 dark:text-slate-200">${st.name}</div>
+                      <div class="text-[10px] text-slate-400 font-mono">${st.id}</div>
+                    </td>
+                    ${dates.map(d => `
+                      <td class="py-3 px-3 text-center">
+                        <select id="a_${st.id}_${d.id}" onchange="setAttendance('${st.id}', '${activeSub.id}', '${d.id}', this.value)" class="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 font-mono text-xs font-bold focus:outline-none focus:border-amber-400">
+                          <option value="" ${!att[d.id] ? 'selected' : ''}>-</option>
+                          ${Object.keys(ATT_STATUS).map(k => `<option value="${k}" ${att[d.id] === k ? 'selected' : ''}>${k} - ${ATT_STATUS[k].label}</option>`).join('')}
+                        </select>
+                      </td>`).join('')}
+                    <td class="py-3 px-3 text-center font-mono font-black text-brand-600 dark:text-amber-400">${a.pct !== null ? a.pct.toFixed(1) + '%' : '-'}</td>
+                    <td class="py-3 px-3 text-center font-mono text-slate-500">${a.present} / ${a.late} / ${a.absent} / ${a.excused}</td>
+                  </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>`}`;
+  };
 
   return `
     <div class="space-y-6">
       <div class="glass-panel p-6 rounded-2xl space-y-4">
         <div>
-          <h1 class="text-xl font-black text-slate-800 dark:text-slate-100">3–Term Grade Entry Matrix</h1>
-          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Enter Quizzes, Activities and Attendance for each term. The term grade is computed automatically.</p>
+          <h1 class="text-xl font-black text-slate-800 dark:text-slate-100">3–Term Class Record</h1>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Record quizzes, activities, exam scores and attendance by date. Students can see these (view only).</p>
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -975,15 +1300,12 @@ function renderGradeEntryPage() {
         ${activeSub ? `
           <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pt-3 border-t border-slate-200 dark:border-slate-800">
             <div class="flex items-center gap-3">
-              <span class="px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider ${activeSub.type === 'major' ? 'bg-brand-500/10 text-brand-600 dark:text-brand-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'}">
-                ${activeSub.type}
-              </span>
+              <span class="px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider ${activeSub.type === 'major' ? 'bg-brand-500/10 text-brand-600 dark:text-brand-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'}">${activeSub.type}</span>
               <div>
                 <div class="text-sm font-black text-slate-800 dark:text-slate-100">${activeSub.title}</div>
                 <div class="text-xs text-slate-400 font-mono">${activeSub.code} • ${activeSub.units} Units</div>
               </div>
             </div>
-
             <div class="w-full sm:w-72">
               <input type="text" placeholder="Search student by name or ID..." value="${uiState.entryFilter.search}" oninput="updateEntrySearch(this.value)" class="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" />
             </div>
@@ -996,87 +1318,21 @@ function renderGradeEntryPage() {
               `).join('')}
             </div>
             <p class="text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
-              ${termLabel} grade = Quizzes <b>${w.quiz}%</b> + Activities <b>${w.activity}%</b> + Attendance <b>${w.attendance}%</b>
+              ${termLabel} grade = Quizzes <b>${w.quiz}%</b> + Activities <b>${w.activity}%</b> + Exam <b>${w.exam}%</b> + Attendance <b>${w.attendance}%</b>
               <span class="opacity-70">(change in Portal Settings)</span>
             </p>
+          </div>
+
+          <div class="flex flex-wrap gap-2">
+            ${VIEWS.map(v => `
+              <button type="button" onclick="setEntryView('${v.key}')" class="px-4 py-2 text-xs font-bold rounded-xl border transition-all ${view === v.key ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-md' : 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800'}">${v.label}</button>
+            `).join('')}
           </div>
         ` : ''}
       </div>
 
       <div class="glass-panel p-6 rounded-2xl space-y-4">
-        ${!activeSub || sectionStudents.length === 0 ? `
-          <div class="text-center py-16 text-slate-500 text-xs">
-            ${!activeSub ? 'Please select a valid subject.' : `No students found in section <b>${uiState.entryFilter.section}</b> matching your search.`}
-          </div>
-        ` : `
-          <div id="entryScroll" class="overflow-x-auto">
-            <table class="w-full text-left text-xs">
-              <thead>
-                <tr class="border-b border-slate-200 dark:border-slate-800 text-slate-400 uppercase font-bold text-[10px]">
-                  <th class="py-3 px-3">Student Name</th>
-                  <th class="py-3 px-3 text-center">Quizzes<div class="normal-case font-semibold opacity-70">score / total</div></th>
-                  <th class="py-3 px-3 text-center">Activities<div class="normal-case font-semibold opacity-70">score / total</div></th>
-                  <th class="py-3 px-3 text-center">Attendance<div class="normal-case font-semibold opacity-70">present / days</div></th>
-                  <th class="py-3 px-3 text-center">${termLabel} Grade</th>
-                  <th class="py-3 px-3 text-center">Prelim</th>
-                  <th class="py-3 px-3 text-center">Midterm</th>
-                  <th class="py-3 px-3 text-center">Pre-Final</th>
-                  <th class="py-3 px-3 text-center">Avg %</th>
-                  <th class="py-3 px-3 text-center">Equiv</th>
-                  <th class="py-3 px-3 text-center">Status</th>
-                  <th class="py-3 px-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-slate-100 dark:divide-slate-800/60">
-                ${sectionStudents.map(st => {
-                  const rec = (appState.grades[st.id] || {})[activeSub.id] || { p: null, m: null, pf: null };
-                  const tc = (rec.comp || {})[term] || {};
-                  const cc = calcComponents(tc);
-                  const calc = calculateSubjectGrade(rec);
-                  const statusColors = {
-                    passed: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-                    failed: 'bg-rose-500/10 text-rose-600 dark:text-rose-400',
-                    inc: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
-                    none: 'bg-slate-500/10 text-slate-500'
-                  };
-                  const pair = (f1, f2, pctVal) => `
-                    <div class="flex items-center justify-center gap-1">
-                      <input id="c_${st.id}_${f1}" type="number" min="0" step="0.5" value="${val(tc[f1])}" onchange="updateComp('${st.id}', '${activeSub.id}', '${term}', '${f1}', this.value)" class="${inputCls}" placeholder="0" />
-                      <span class="text-slate-400">/</span>
-                      <input id="c_${st.id}_${f2}" type="number" min="0" step="0.5" value="${val(tc[f2])}" onchange="updateComp('${st.id}', '${activeSub.id}', '${term}', '${f2}', this.value)" class="${inputCls}" placeholder="0" />
-                    </div>
-                    <div class="text-center text-[10px] font-mono text-slate-400 mt-1">${pctTxt(pctVal)}</div>`;
-                  const cell = k => `<td class="py-3 px-3 text-center font-mono ${k === term ? 'font-black text-brand-600 dark:text-amber-400' : ''}">${rec[k] !== null && rec[k] !== undefined ? Number(rec[k]).toFixed(1) : '-'}</td>`;
-                  return `
-                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
-                      <td class="py-3 px-3">
-                        <div class="font-bold text-slate-800 dark:text-slate-200">${st.name}</div>
-                        <div class="text-[10px] text-slate-400 font-mono">${st.id}</div>
-                      </td>
-                      <td class="py-3 px-3">${pair('qs', 'qt', cc.q)}</td>
-                      <td class="py-3 px-3">${pair('acs', 'act', cc.a)}</td>
-                      <td class="py-3 px-3">${pair('ap', 'ad', cc.att)}</td>
-                      <td class="py-3 px-3 text-center font-mono font-black text-brand-600 dark:text-amber-400">${rec[term] !== null && rec[term] !== undefined ? Number(rec[term]).toFixed(1) + '%' : '-'}</td>
-                      ${cell('p')}${cell('m')}${cell('pf')}
-                      <td class="py-3 px-3 text-center font-mono font-semibold">${calc.pct !== null ? calc.pct.toFixed(1) + '%' : '-'}</td>
-                      <td class="py-3 px-3 text-center font-mono font-black text-brand-600 dark:text-amber-400">${formatGradeEq(calc.eq)}</td>
-                      <td class="py-3 px-3 text-center">
-                        <span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${statusColors[calc.status]}">
-                          ${calc.status}
-                        </span>
-                      </td>
-                      <td class="py-3 px-3 text-right">
-                        <button type="button" onclick="openTranscriptModal('${st.id}')" class="px-3 py-1.5 rounded-lg bg-brand-500/10 text-brand-600 dark:text-brand-400 hover:bg-brand-500 hover:text-white font-bold transition-all text-xs">
-                          PDF
-                        </button>
-                      </td>
-                    </tr>
-                  `;
-                }).join('')}
-              </tbody>
-            </table>
-          </div>
-        `}
+        ${viewBody()}
       </div>
     </div>
   `;
@@ -1084,6 +1340,11 @@ function renderGradeEntryPage() {
 
 function setEntryTerm(key) {
   uiState.entryFilter.term = key;
+  renderApp();
+}
+
+function setEntryView(key) {
+  uiState.entryFilter.view = key;
   renderApp();
 }
 
@@ -1127,44 +1388,182 @@ function rerenderKeepPosition() {
   }
 }
 
-function updateComp(studentId, subjectId, termKey, field, rawVal) {
-  // Only teachers may change grades. Students have no edit access.
+function entryCtx() {
+  const courseSubjects = appState.subjects.filter(s => s.course === uiState.entryFilter.course);
+  const sub = courseSubjects.find(s => s.id === uiState.entryFilter.subject) || courseSubjects[0];
+  return { section: uiState.entryFilter.section, subjectId: sub ? sub.id : null, term: uiState.entryFilter.term || 'p' };
+}
+
+function requireTeacher() {
   if (!isTeacherSession()) {
     showToast('Only teachers can edit grades.', 'error');
+    return false;
+  }
+  return true;
+}
+
+function addClassItem(e, kind) {
+  e.preventDefault();
+  if (!requireTeacher()) return;
+  const { section, subjectId, term } = entryCtx();
+  if (!subjectId) return;
+  const name = document.getElementById('newItemName').value.trim();
+  const total = parseFloat(document.getElementById('newItemTotal').value);
+  if (!name || isNaN(total) || total <= 0) {
+    showToast('Enter a name and total points greater than 0.', 'error');
     return;
   }
+  const cw = getClassWork(section, subjectId, term, true);
+  cw[kind].push({ id: newItemId(kind === 'quizzes' ? 'q' : 'a'), name, total });
+  syncClass(section, subjectId, term);
+  saveState();
+  rerenderKeepPosition();
+  showToast(`${name} added.`, 'success');
+}
+
+function removeClassItem(kind, itemId) {
+  if (!requireTeacher()) return;
+  const { section, subjectId, term } = entryCtx();
+  const cw = getClassWork(section, subjectId, term, true);
+  const it = cw[kind].find(x => x.id === itemId);
+  if (!it || !confirm(`Remove "${it.name}" and all student scores for it?`)) return;
+  cw[kind] = cw[kind].filter(x => x.id !== itemId);
+  appState.students.filter(st => st.section === section).forEach(st => {
+    const rec = (appState.grades[st.id] || {})[subjectId];
+    if (rec && rec.items) delete rec.items[itemId];
+  });
+  syncClass(section, subjectId, term);
+  saveState();
+  rerenderKeepPosition();
+  showToast('Removed.', 'success');
+}
+
+function setExamTotal(e) {
+  e.preventDefault();
+  if (!requireTeacher()) return;
+  const { section, subjectId, term } = entryCtx();
+  if (!subjectId) return;
+  const total = parseFloat(document.getElementById('examTotalInput').value);
+  if (isNaN(total) || total <= 0) {
+    showToast('Enter total points greater than 0.', 'error');
+    return;
+  }
+  const cw = getClassWork(section, subjectId, term, true);
+  if (cw.exam) cw.exam.total = total;
+  else cw.exam = { id: newItemId('x'), total };
+  syncClass(section, subjectId, term);
+  saveState();
+  rerenderKeepPosition();
+  showToast('Exam saved.', 'success');
+}
+
+function removeExam() {
+  if (!requireTeacher()) return;
+  const { section, subjectId, term } = entryCtx();
+  const cw = getClassWork(section, subjectId, term, true);
+  if (!cw.exam || !confirm('Remove the exam and all student exam scores for this term?')) return;
+  const exId = cw.exam.id;
+  cw.exam = null;
+  appState.students.filter(st => st.section === section).forEach(st => {
+    const rec = (appState.grades[st.id] || {})[subjectId];
+    if (rec && rec.items) delete rec.items[exId];
+  });
+  syncClass(section, subjectId, term);
+  saveState();
+  rerenderKeepPosition();
+  showToast('Exam removed.', 'success');
+}
+
+function setItemScore(studentId, subjectId, itemId, rawVal, total) {
+  if (!requireTeacher()) return;
+  const { section, term } = entryCtx();
   const num = rawVal === '' ? null : parseFloat(rawVal);
-  if (rawVal !== '' && (isNaN(num) || num < 0)) {
-    showToast('Please enter a valid number (0 or higher).', 'error');
+  if (rawVal !== '' && (isNaN(num) || num < 0 || num > total)) {
+    showToast(`Score must be between 0 and ${total}.`, 'error');
     setTimeout(rerenderKeepPosition, 0);
     return;
   }
-
   if (!appState.grades[studentId]) appState.grades[studentId] = {};
   const rec = appState.grades[studentId][subjectId] || (appState.grades[studentId][subjectId] = { p: null, m: null, pf: null });
-  if (!rec.comp) rec.comp = {};
-  const tc = rec.comp[termKey] || (rec.comp[termKey] = { qs: null, qt: null, acs: null, act: null, ap: null, ad: null });
+  if (!rec.items) rec.items = {};
+  if (num === null) delete rec.items[itemId];
+  else rec.items[itemId] = num;
 
-  const prev = tc[field];
-  tc[field] = num;
-
-  // score / present can never be higher than total / days
-  const bad = COMP_PAIRS.find(([sc, tt]) => tc[sc] !== null && tc[tt] !== null && tc[sc] > tc[tt]);
-  if (bad) {
-    tc[field] = prev;
-    showToast(bad[0] === 'ap' ? 'Days present cannot be more than total days.' : 'Score cannot be higher than the total points.', 'error');
-    setTimeout(rerenderKeepPosition, 0);
-    return;
-  }
-
-  const allEmpty = Object.values(tc).every(v => v === null);
-  const tg = calcTermGrade(tc);
-  rec[termKey] = tg;            // null until quizzes, activities and attendance are all filled in
-  if (allEmpty) delete rec.comp[termKey];
-
+  const st = appState.students.find(s => s.id === studentId);
+  if (st) syncTermGrade(st, subjectId, term);
   saveState();
   setTimeout(rerenderKeepPosition, 0);
   showToast('Saved', 'success');
+}
+
+function addAttendanceDate(e) {
+  e.preventDefault();
+  if (!requireTeacher()) return;
+  const { section, subjectId, term } = entryCtx();
+  if (!subjectId) return;
+  const date = document.getElementById('newAttDate').value;
+  if (!date) return;
+  const cw = getClassWork(section, subjectId, term, true);
+  if (cw.dates.some(d => d.date === date)) {
+    showToast('That date is already added.', 'error');
+    return;
+  }
+  cw.dates.push({ id: newItemId('d'), date });
+  cw.dates.sort((a, b) => a.date.localeCompare(b.date));
+  syncClass(section, subjectId, term);
+  saveState();
+  rerenderKeepPosition();
+  showToast(`${fmtDate(date)} added.`, 'success');
+}
+
+function removeAttendanceDate(dateId) {
+  if (!requireTeacher()) return;
+  const { section, subjectId, term } = entryCtx();
+  const cw = getClassWork(section, subjectId, term, true);
+  const d = cw.dates.find(x => x.id === dateId);
+  if (!d || !confirm(`Remove ${fmtDate(d.date)} and every student's attendance mark for it?`)) return;
+  cw.dates = cw.dates.filter(x => x.id !== dateId);
+  appState.students.filter(st => st.section === section).forEach(st => {
+    const rec = (appState.grades[st.id] || {})[subjectId];
+    if (rec && rec.att) delete rec.att[dateId];
+  });
+  syncClass(section, subjectId, term);
+  saveState();
+  rerenderKeepPosition();
+  showToast('Date removed.', 'success');
+}
+
+function setAttendance(studentId, subjectId, dateId, status) {
+  if (!requireTeacher()) return;
+  const { term } = entryCtx();
+  if (status && !ATT_STATUS[status]) return;
+  if (!appState.grades[studentId]) appState.grades[studentId] = {};
+  const rec = appState.grades[studentId][subjectId] || (appState.grades[studentId][subjectId] = { p: null, m: null, pf: null });
+  if (!rec.att) rec.att = {};
+  if (status) rec.att[dateId] = status;
+  else delete rec.att[dateId];
+
+  const st = appState.students.find(s => s.id === studentId);
+  if (st) syncTermGrade(st, subjectId, term);
+  saveState();
+  setTimeout(rerenderKeepPosition, 0);
+  showToast('Saved', 'success');
+}
+
+function markAllPresent(dateId) {
+  if (!requireTeacher()) return;
+  const { section, subjectId, term } = entryCtx();
+  let n = 0;
+  appState.students.filter(st => st.section === section).forEach(st => {
+    if (!appState.grades[st.id]) appState.grades[st.id] = {};
+    const rec = appState.grades[st.id][subjectId] || (appState.grades[st.id][subjectId] = { p: null, m: null, pf: null });
+    if (!rec.att) rec.att = {};
+    if (!rec.att[dateId]) { rec.att[dateId] = 'P'; n++; }
+  });
+  syncClass(section, subjectId, term);
+  saveState();
+  rerenderKeepPosition();
+  showToast(n ? `Marked ${n} unmarked student(s) present.` : 'Everyone is already marked.', 'success');
 }
 
 /* ==========================================================================
@@ -1662,9 +2061,9 @@ function renderSettingsPage() {
       <div class="glass-panel p-6 rounded-2xl space-y-4">
         <div>
           <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">Grade Computation Weights</h2>
-          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Term grade = Quizzes + Activities + Attendance, using these percentages (must total 100%). Saving recomputes all term grades.</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Term grade = Quizzes + Activities + Exam + Attendance, using these percentages (must total 100%). Saving recomputes all term grades.</p>
         </div>
-        <form onsubmit="handleSaveWeights(event)" class="grid grid-cols-3 gap-3">
+        <form onsubmit="handleSaveWeights(event)" class="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div class="space-y-1">
             <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Quizzes %</label>
             <input type="number" id="wQuiz" min="0" max="100" step="1" required value="${s.weights.quiz}" class="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" />
@@ -1674,10 +2073,14 @@ function renderSettingsPage() {
             <input type="number" id="wActivity" min="0" max="100" step="1" required value="${s.weights.activity}" class="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" />
           </div>
           <div class="space-y-1">
+            <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Exam %</label>
+            <input type="number" id="wExam" min="0" max="100" step="1" required value="${s.weights.exam}" class="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" />
+          </div>
+          <div class="space-y-1">
             <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Attendance %</label>
             <input type="number" id="wAttendance" min="0" max="100" step="1" required value="${s.weights.attendance}" class="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" />
           </div>
-          <div class="col-span-3 flex justify-end">
+          <div class="col-span-2 sm:col-span-4 flex justify-end">
             <button type="submit" class="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-md transition-all">Save Weights</button>
           </div>
         </form>
@@ -1750,16 +2153,19 @@ function handleSaveWeights(e) {
   if (!isTeacherSession()) return;
   const quiz = parseFloat(document.getElementById('wQuiz').value);
   const activity = parseFloat(document.getElementById('wActivity').value);
+  const exam = parseFloat(document.getElementById('wExam').value);
   const attendance = parseFloat(document.getElementById('wAttendance').value);
-  if ([quiz, activity, attendance].some(v => isNaN(v) || v < 0)) {
+  const all = [quiz, activity, exam, attendance];
+  if (all.some(v => isNaN(v) || v < 0)) {
     showToast('Enter valid percentages.', 'error');
     return;
   }
-  if (Math.abs(quiz + activity + attendance - 100) > 0.001) {
-    showToast(`Weights must total 100% (currently ${quiz + activity + attendance}%).`, 'error');
+  const sum = quiz + activity + exam + attendance;
+  if (Math.abs(sum - 100) > 0.001) {
+    showToast(`Weights must total 100% (currently ${sum}%).`, 'error');
     return;
   }
-  appState.settings.weights = { quiz, activity, attendance };
+  appState.settings.weights = { quiz, activity, exam, attendance };
   recomputeAllTermGrades();
   saveState();
   renderApp();
@@ -1787,6 +2193,7 @@ function renderStudentDashboard() {
   if (!student) return `<div class="p-8 text-center text-xs text-slate-500">Student account not found in database.</div>`;
 
   const sm = getStudentSummary(student);
+  const classData = getStudentClassData(student);
 
   return `
     <div class="space-y-6 max-w-5xl mx-auto">
@@ -1844,11 +2251,11 @@ function renderStudentDashboard() {
         </div>
       </div>
 
-      <div class="glass-panel p-6 rounded-2xl space-y-4">
+      <div class="glass-panel p-6 rounded-2xl space-y-5">
         <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div>
-            <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">Class Standing Breakdown</h2>
-            <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Quizzes ${getWeights().quiz}% + Activities ${getWeights().activity}% + Attendance ${getWeights().attendance}% • View only</p>
+            <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">Class Record</h2>
+            <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Quizzes ${getWeights().quiz}% + Activities ${getWeights().activity}% + Exam ${getWeights().exam}% + Attendance ${getWeights().attendance}% • View only</p>
           </div>
           <div class="flex rounded-xl bg-slate-200/80 dark:bg-slate-800/80 p-1 border border-slate-300 dark:border-slate-700/60 w-full md:w-auto">
             ${TERMS.map(t => `
@@ -1856,8 +2263,37 @@ function renderStudentDashboard() {
             `).join('')}
           </div>
         </div>
-        <div id="compCanvasWrap" class="overflow-x-auto protected-grades" oncontextmenu="return false" ondragstart="return false">
-          <canvas id="compCanvas" role="img" aria-label="Quizzes, activities and attendance breakdown (image)" oncontextmenu="return false"></canvas>
+
+        <div class="space-y-2">
+          <h3 class="text-xs font-black text-slate-700 dark:text-slate-200 uppercase tracking-wider">All Subjects — ${(TERMS.find(t => t.key === uiState.studentTerm) || TERMS[0]).label}</h3>
+          <div id="stSummaryWrap" class="overflow-x-auto protected-grades" oncontextmenu="return false" ondragstart="return false">
+            <canvas id="stSummaryCanvas" role="img" aria-label="Term summary per subject (image)" oncontextmenu="return false"></canvas>
+          </div>
+        </div>
+
+        <div class="space-y-4 pt-4 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <h3 class="text-xs font-black text-slate-700 dark:text-slate-200 uppercase tracking-wider">Details per Subject</h3>
+            <select onchange="setStudentSubject(this.value)" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200">
+              ${classData.subjects.map(sub => `<option value="${sub.id}" ${classData.subjectId === sub.id ? 'selected' : ''}>${sub.code} - ${sub.title}</option>`).join('')}
+            </select>
+          </div>
+
+          ${[
+            { id: 'Quiz', title: 'Quizzes', n: classData.detail.quizzes.length, none: 'No quizzes recorded yet.' },
+            { id: 'Act', title: 'Activities', n: classData.detail.activities.length, none: 'No activities recorded yet.' },
+            { id: 'Exam', title: 'Exam', n: classData.detail.exam.length, none: 'No exam recorded yet.' },
+            { id: 'Att', title: 'Attendance', n: classData.detail.attendance.length, none: 'No attendance recorded yet.' }
+          ].map(b => `
+            <div class="space-y-2">
+              <h4 class="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">${b.title}</h4>
+              ${b.n === 0
+                ? `<p class="text-xs text-slate-500 dark:text-slate-400 px-1">${b.none}</p>`
+                : `<div id="st${b.id}Wrap" class="overflow-x-auto protected-grades" oncontextmenu="return false" ondragstart="return false">
+                     <canvas id="st${b.id}Canvas" role="img" aria-label="${b.title} (image)" oncontextmenu="return false"></canvas>
+                   </div>`}
+            </div>
+          `).join('')}
         </div>
       </div>
     </div>
@@ -2239,36 +2675,63 @@ function setStudentTerm(key) {
   renderApp();
 }
 
-function drawCompCanvas() {
-  const canvas = document.getElementById('compCanvas');
-  const wrap = document.getElementById('compCanvasWrap');
-  if (!canvas || !wrap || !authUser || authUser.role !== 'student') return;
-  const student = appState.students.find(s => s.id === authUser.studentId);
-  if (!student) return;
-  const sm = getStudentSummary(student);
+function setStudentSubject(id) {
+  uiState.studentSubject = id;
+  renderApp();
+}
+
+function getStudentClassData(student) {
   const term = uiState.studentTerm || 'p';
+  const subjects = appState.subjects.filter(s => s.course === student.course);
+  const picked = subjects.find(s => s.id === uiState.studentSubject) || subjects[0];
+  const subjectId = picked ? picked.id : null;
+
+  const summary = subjects.map(sub => {
+    const bd = computeTermBreakdown(student, sub.id, term);
+    const rec = (appState.grades[student.id] || {})[sub.id] || {};
+    return { sub, bd, grade: rec[term] };
+  });
+
+  const detail = { quizzes: [], activities: [], exam: [], attendance: [] };
+  if (subjectId) {
+    const cw = getClassWork(student.section, subjectId, term, false);
+    const rec = (appState.grades[student.id] || {})[subjectId] || {};
+    const items = rec.items || {};
+    const att = rec.att || {};
+    const pct = (sc, tt) => hasVal(sc) ? pctOf(sc, tt).toFixed(1) + '%' : '-';
+    const row = it => [it.name, hasVal(items[it.id]) ? String(items[it.id]) : '-', String(it.total), pct(items[it.id], it.total)];
+    detail.quizzes = cw.quizzes.map(row);
+    detail.activities = cw.activities.map(row);
+    if (cw.exam) detail.exam = [row({ id: cw.exam.id, name: 'Exam', total: cw.exam.total })];
+    detail.attendance = cw.dates.map(d => {
+      const st = att[d.id];
+      return [fmtDate(d.date), st ? { t: ATT_STATUS[st].label, pill: true, tone: ATT_STATUS[st].tone } : { t: 'Not marked', tone: 'muted' }];
+    });
+  }
+  return { term, subjects, subjectId, summary, detail };
+}
+
+/* Generic image-table renderer: draws text onto a canvas so it is not present in the page HTML */
+function drawGenericTable(canvasId, wrapId, cols, rows, minFlex) {
+  const canvas = document.getElementById(canvasId);
+  const wrap = document.getElementById(wrapId);
+  if (!canvas || !wrap) return;
 
   const dark = uiState.darkMode;
   const C = dark
-    ? { text: '#e2e8f0', muted: '#94a3b8', line: 'rgba(148,163,184,0.18)', code: '#fbbf24', accent: '#fbbf24' }
-    : { text: '#1e293b', muted: '#94a3b8', line: 'rgba(148,163,184,0.35)', code: '#002B66', accent: '#002B66' };
+    ? { text: '#e2e8f0', muted: '#94a3b8', line: 'rgba(148,163,184,0.18)', code: '#fbbf24', accent: '#fbbf24',
+        pass: ['rgba(16,185,129,0.15)', '#34d399'], fail: ['rgba(244,63,94,0.15)', '#fb7185'],
+        warn: ['rgba(245,158,11,0.15)', '#fbbf24'], muted2: ['rgba(148,163,184,0.15)', '#94a3b8'] }
+    : { text: '#1e293b', muted: '#94a3b8', line: 'rgba(148,163,184,0.35)', code: '#002B66', accent: '#002B66',
+        pass: ['rgba(16,185,129,0.12)', '#059669'], fail: ['rgba(244,63,94,0.12)', '#e11d48'],
+        warn: ['rgba(245,158,11,0.15)', '#d97706'], muted2: ['rgba(100,116,139,0.12)', '#64748b'] };
 
-  const cols = [
-    { w: 90, align: 'left', label: 'CODE', font: 'code' },
-    { w: 0, align: 'left', label: 'SUBJECT TITLE', font: 'title' },
-    { w: 110, align: 'center', label: 'QUIZZES', font: 'mono' },
-    { w: 80, align: 'center', label: 'QUIZ %', font: 'mono' },
-    { w: 110, align: 'center', label: 'ACTIVITIES', font: 'mono' },
-    { w: 90, align: 'center', label: 'ACTIVITY %', font: 'mono' },
-    { w: 110, align: 'center', label: 'ATTENDANCE', font: 'mono' },
-    { w: 100, align: 'center', label: 'ATTEND. %', font: 'mono' },
-    { w: 100, align: 'center', label: 'TERM GRADE', font: 'grade' }
-  ];
+  const flexIdx = cols.findIndex(c => c.w === 0);
   const fixed = cols.reduce((a, c) => a + c.w, 0);
-  const W = Math.max(wrap.clientWidth || 0, fixed + 260);
-  cols[1].w = W - fixed;
+  const W = Math.max(wrap.clientWidth || 0, fixed + (minFlex || 200));
+  if (flexIdx >= 0) cols[flexIdx].w = W - fixed;
 
-  const headerH = 44, rowH = 48, H = headerH + rowH * sm.rows.length + 4;
+  const headerH = 42, rowH = 44, H = headerH + rowH * rows.length + 4;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(W * dpr);
   canvas.height = Math.round(H * dpr);
@@ -2290,8 +2753,6 @@ function drawCompCanvas() {
     while (text.length > 1 && ctx.measureText(text + '…').width > maxW) text = text.slice(0, -1);
     return text + '…';
   };
-  const pairTxt = (a, b) => (a === null || a === undefined || b === null || b === undefined || a === '' || b === '') ? '-' : `${a} / ${b}`;
-  const pctTxt = v => (v === null || v === undefined) ? '-' : v.toFixed(1) + '%';
 
   ctx.textBaseline = 'middle';
   ctx.font = `700 10px ${SANS}`;
@@ -2303,33 +2764,75 @@ function drawCompCanvas() {
   ctx.strokeStyle = C.line; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, headerH + 0.5); ctx.lineTo(W, headerH + 0.5); ctx.stroke();
 
-  sm.rows.forEach((r, ri) => {
+  rows.forEach((r, ri) => {
     const cy = headerH + ri * rowH + rowH / 2;
-    const rec = r.g || {};
-    const tc = (rec.comp || {})[term] || {};
-    const cc = calcComponents(tc);
-    const tg = rec[term];
-    const vals = [
-      r.sub.code, r.sub.title,
-      pairTxt(tc.qs, tc.qt), pctTxt(cc.q),
-      pairTxt(tc.acs, tc.act), pctTxt(cc.a),
-      pairTxt(tc.ap, tc.ad), pctTxt(cc.att),
-      (tg === null || tg === undefined) ? '-' : Number(tg).toFixed(1) + '%'
-    ];
     cols.forEach((c, i) => {
+      const cell = (r[i] !== null && typeof r[i] === 'object') ? r[i] : { t: String(r[i]) };
       ctx.textAlign = c.align === 'left' ? 'left' : 'center';
+      if (cell.pill) {
+        ctx.font = `700 10px ${SANS}`;
+        const label = cell.t.toUpperCase();
+        const pw = ctx.measureText(label).width + 22, ph = 22;
+        const px = colX[i] + c.w / 2 - pw / 2, py = cy - ph / 2;
+        const pal = cell.tone === 'pass' ? C.pass : cell.tone === 'fail' ? C.fail : cell.tone === 'warn' ? C.warn : C.muted2;
+        ctx.fillStyle = pal[0];
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(px, py, pw, ph, 11); else ctx.rect(px, py, pw, ph);
+        ctx.fill();
+        ctx.fillStyle = pal[1];
+        ctx.textAlign = 'center';
+        ctx.fillText(label, colX[i] + c.w / 2, cy + 0.5);
+        return;
+      }
       if (c.font === 'code') { ctx.font = `700 12px ${MONO}`; ctx.fillStyle = C.code; }
       else if (c.font === 'title') { ctx.font = `600 12px ${SANS}`; ctx.fillStyle = C.text; }
       else if (c.font === 'grade') { ctx.font = `800 13px ${MONO}`; ctx.fillStyle = C.accent; }
       else { ctx.font = `400 12px ${MONO}`; ctx.fillStyle = C.text; }
-      const t = c.font === 'title' ? fit(String(vals[i]), c.w - 24) : String(vals[i]);
+      if (cell.tone === 'muted') ctx.fillStyle = C.muted;
+      const t = c.align === 'left' ? fit(cell.t, c.w - 24) : cell.t;
       ctx.fillText(t, place(c, i), cy);
     });
-    if (ri < sm.rows.length - 1) {
+    if (ri < rows.length - 1) {
       ctx.strokeStyle = C.line;
       ctx.beginPath(); ctx.moveTo(0, headerH + (ri + 1) * rowH + 0.5); ctx.lineTo(W, headerH + (ri + 1) * rowH + 0.5); ctx.stroke();
     }
   });
+}
+
+function drawCompCanvas() {
+  if (!authUser || authUser.role !== 'student') return;
+  const student = appState.students.find(s => s.id === authUser.studentId);
+  if (!student) return;
+  const d = getStudentClassData(student);
+  const pct = v => (v === null || v === undefined) ? '-' : v.toFixed(1) + '%';
+
+  drawGenericTable('stSummaryCanvas', 'stSummaryWrap', [
+    { w: 90, align: 'left', label: 'CODE', font: 'code' },
+    { w: 0, align: 'left', label: 'SUBJECT TITLE', font: 'title' },
+    { w: 100, align: 'center', label: 'QUIZZES', font: 'mono' },
+    { w: 100, align: 'center', label: 'ACTIVITIES', font: 'mono' },
+    { w: 90, align: 'center', label: 'EXAM', font: 'mono' },
+    { w: 110, align: 'center', label: 'ATTENDANCE', font: 'mono' },
+    { w: 110, align: 'center', label: 'TERM GRADE', font: 'grade' }
+  ], d.summary.map(r => [
+    r.sub.code, r.sub.title,
+    pct(r.bd.quiz && r.bd.quiz.pct), pct(r.bd.act && r.bd.act.pct), pct(r.bd.exam && r.bd.exam.pct), pct(r.bd.attendance.pct),
+    (r.grade === null || r.grade === undefined) ? '-' : Number(r.grade).toFixed(1) + '%'
+  ]), 240);
+
+  const scoreCols = label => [
+    { w: 0, align: 'left', label, font: 'title' },
+    { w: 100, align: 'center', label: 'SCORE', font: 'mono' },
+    { w: 100, align: 'center', label: 'TOTAL', font: 'mono' },
+    { w: 110, align: 'center', label: 'PERCENT', font: 'grade' }
+  ];
+  drawGenericTable('stQuizCanvas', 'stQuizWrap', scoreCols('QUIZ'), d.detail.quizzes, 200);
+  drawGenericTable('stActCanvas', 'stActWrap', scoreCols('ACTIVITY'), d.detail.activities, 200);
+  drawGenericTable('stExamCanvas', 'stExamWrap', scoreCols('EXAM'), d.detail.exam, 200);
+  drawGenericTable('stAttCanvas', 'stAttWrap', [
+    { w: 0, align: 'left', label: 'DATE', font: 'title' },
+    { w: 160, align: 'center', label: 'STATUS', font: 'mono' }
+  ], d.detail.attendance, 200);
 }
 
 let gradeCanvasResizeTimer = null;
