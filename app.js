@@ -65,7 +65,8 @@ function generateCleanStateData() {
     settings: {
       school: 'University of the Assumption',
       registrar: 'Prof. Mark Anthony Madalipay',
-      term: '1st Semester, A.Y. 2026-2027'
+      term: '1st Semester, A.Y. 2026-2027',
+      weights: { quiz: 40, activity: 40, attendance: 20 }
     },
     subjects: generateSubjectsSeed(),
     courses: [...COURSES],
@@ -90,6 +91,8 @@ function loadState() {
       if (parsed && parsed.students && parsed.subjects && parsed.grades) {
         if (!parsed.courses) parsed.courses = [...COURSES];
         if (!parsed.sections) parsed.sections = [...SECTIONS];
+        if (!parsed.settings) parsed.settings = generateCleanStateData().settings;
+        if (!parsed.settings.weights) parsed.settings.weights = { quiz: 40, activity: 40, attendance: 20 };
         if (!parsed.teachers || !parsed.teachers.length) parsed.teachers = generateCleanStateData().teachers;
         parsed.students.forEach(st => {
           if (!st.password) st.password = String(100000 + Math.floor(Math.random() * 900000));
@@ -134,6 +137,64 @@ function resetStateToDefault() {
   saveState();
   renderApp();
   showToast('Database reset to empty state.', 'info');
+}
+
+/* ==========================================================================
+   2b. TERM GRADE COMPONENTS (QUIZZES, ACTIVITIES, ATTENDANCE)
+   Each term grade = Quizzes% x w1 + Activities% x w2 + Attendance% x w3
+   Stored per student/subject: record.comp[term] = { qs, qt, acs, act, ap, ad }
+     qs/qt  = quiz score / quiz total points
+     acs/act = activity score / activity total points
+     ap/ad  = days present / total class days
+   ========================================================================== */
+const TERMS = [
+  { key: 'p', label: 'Prelim' },
+  { key: 'm', label: 'Midterm' },
+  { key: 'pf', label: 'Pre-Final' }
+];
+const COMP_PAIRS = [['qs', 'qt'], ['acs', 'act'], ['ap', 'ad']];
+
+function isTeacherSession() {
+  return !!(authUser && authUser.role === 'teacher');
+}
+
+function getWeights() {
+  const w = (appState.settings && appState.settings.weights) || {};
+  const n = (v, d) => (v === undefined || v === null || isNaN(parseFloat(v))) ? d : parseFloat(v);
+  return { quiz: n(w.quiz, 40), activity: n(w.activity, 40), attendance: n(w.attendance, 20) };
+}
+
+function ratioPct(score, total) {
+  const x = parseFloat(score), y = parseFloat(total);
+  if (isNaN(x) || isNaN(y) || y <= 0) return null;
+  return Math.max(0, Math.min(100, (x / y) * 100));
+}
+
+function calcComponents(c) {
+  c = c || {};
+  return { q: ratioPct(c.qs, c.qt), a: ratioPct(c.acs, c.act), att: ratioPct(c.ap, c.ad) };
+}
+
+function calcTermGrade(c) {
+  const { q, a, att } = calcComponents(c);
+  if (q === null || a === null || att === null) return null;
+  const w = getWeights();
+  const total = (w.quiz + w.activity + w.attendance) || 100;
+  return (q * w.quiz + a * w.activity + att * w.attendance) / total;
+}
+
+function recomputeAllTermGrades() {
+  Object.keys(appState.grades).forEach(sid => {
+    const subs = appState.grades[sid] || {};
+    Object.keys(subs).forEach(subId => {
+      const rec = subs[subId];
+      if (!rec || !rec.comp) return;
+      TERMS.forEach(t => {
+        const tg = calcTermGrade(rec.comp[t.key]);
+        if (tg !== null) rec[t.key] = tg;
+      });
+    });
+  });
 }
 
 /* ==========================================================================
@@ -352,11 +413,20 @@ function parseAndImportCSV(csvText, sectionId) {
       const mVal = mIdx !== -1 && cols[mIdx] !== '' ? parseFloat(cols[mIdx]) : null;
       const pfVal = pfIdx !== -1 && cols[pfIdx] !== '' ? parseFloat(cols[pfIdx]) : null;
 
-      appState.grades[id][sub.id] = {
-        p: isNaN(pVal) ? null : pVal,
-        m: isNaN(mVal) ? null : mVal,
-        pf: isNaN(pfVal) ? null : pfVal
-      };
+      const rec = appState.grades[id][sub.id] || { p: null, m: null, pf: null };
+      const incoming = { p: isNaN(pVal) ? null : pVal, m: isNaN(mVal) ? null : mVal, pf: isNaN(pfVal) ? null : pfVal };
+      TERMS.forEach(t => {
+        const nv = incoming[t.key];
+        const cur = rec[t.key];
+        if (nv !== null && (cur === null || cur === undefined || Math.abs(cur - nv) > 0.05)) {
+          // A different grade was imported: it replaces any computed components for that term
+          rec[t.key] = nv;
+          if (rec.comp) delete rec.comp[t.key];
+        } else if (nv === null && (rec.comp === undefined || !rec.comp[t.key])) {
+          rec[t.key] = null;
+        }
+      });
+      appState.grades[id][sub.id] = rec;
     });
 
     importedCount++;
@@ -373,7 +443,8 @@ function parseAndImportCSV(csvText, sectionId) {
 const uiState = {
   activePage: 'dashboard',
   dashFilter: { course: 'all', section: 'all' },
-  entryFilter: { course: 'BSIT', section: 'BSIT-1A', subject: 'BSIT-IT101', search: '' },
+  entryFilter: { course: 'BSIT', section: 'BSIT-1A', subject: 'BSIT-IT101', search: '', term: 'p' },
+  studentTerm: 'p',
   studentsSectionFilter: 'BSIT-1A',
   studentsSearch: '',
   teacherPasswordVisible: false,
@@ -857,18 +928,25 @@ function updateDashFilterSection(val) {
 function renderGradeEntryPage() {
   const courseSubjects = appState.subjects.filter(s => s.course === uiState.entryFilter.course);
   const activeSub = courseSubjects.find(s => s.id === uiState.entryFilter.subject) || courseSubjects[0];
+  const term = uiState.entryFilter.term || 'p';
+  const termLabel = (TERMS.find(t => t.key === term) || TERMS[0]).label;
+  const w = getWeights();
   const sectionStudents = appState.students.filter(s => s.section === uiState.entryFilter.section && (
     !uiState.entryFilter.search || 
     s.name.toLowerCase().includes(uiState.entryFilter.search.toLowerCase()) || 
     s.id.includes(uiState.entryFilter.search)
   ));
 
+  const inputCls = 'w-14 px-1.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 font-mono text-xs text-center focus:outline-none focus:border-amber-400';
+  const val = v => (v !== null && v !== undefined ? v : '');
+  const pctTxt = v => (v === null || v === undefined ? '-' : v.toFixed(1) + '%');
+
   return `
     <div class="space-y-6">
       <div class="glass-panel p-6 rounded-2xl space-y-4">
         <div>
           <h1 class="text-xl font-black text-slate-800 dark:text-slate-100">3–Term Grade Entry Matrix</h1>
-          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Input raw numerical scores (0–100) for Prelim, Midterm, and Pre-Final.</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Enter Quizzes, Activities and Attendance for each term. The term grade is computed automatically.</p>
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -910,6 +988,18 @@ function renderGradeEntryPage() {
               <input type="text" placeholder="Search student by name or ID..." value="${uiState.entryFilter.search}" oninput="updateEntrySearch(this.value)" class="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" />
             </div>
           </div>
+
+          <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div class="flex rounded-xl bg-slate-200/80 dark:bg-slate-800/80 p-1 border border-slate-300 dark:border-slate-700/60 w-full md:w-auto">
+              ${TERMS.map(t => `
+                <button type="button" onclick="setEntryTerm('${t.key}')" class="flex-1 md:flex-none px-5 py-2 text-xs font-bold rounded-lg transition-all ${term === t.key ? 'bg-brand-500 text-white shadow-md' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}">${t.label}</button>
+              `).join('')}
+            </div>
+            <p class="text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
+              ${termLabel} grade = Quizzes <b>${w.quiz}%</b> + Activities <b>${w.activity}%</b> + Attendance <b>${w.attendance}%</b>
+              <span class="opacity-70">(change in Portal Settings)</span>
+            </p>
+          </div>
         ` : ''}
       </div>
 
@@ -919,55 +1009,65 @@ function renderGradeEntryPage() {
             ${!activeSub ? 'Please select a valid subject.' : `No students found in section <b>${uiState.entryFilter.section}</b> matching your search.`}
           </div>
         ` : `
-          <div class="overflow-x-auto">
+          <div id="entryScroll" class="overflow-x-auto">
             <table class="w-full text-left text-xs">
               <thead>
                 <tr class="border-b border-slate-200 dark:border-slate-800 text-slate-400 uppercase font-bold text-[10px]">
-                  <th class="py-3 px-4">Student Name</th>
-                  <th class="py-3 px-4 w-28">Prelim</th>
-                  <th class="py-3 px-4 w-28">Midterm</th>
-                  <th class="py-3 px-4 w-28">Pre-Final</th>
-                  <th class="py-3 px-4 text-center">Average %</th>
-                  <th class="py-3 px-4 text-center">Equiv Grade</th>
-                  <th class="py-3 px-4 text-center">Status</th>
-                  <th class="py-3 px-4 text-right">Actions</th>
+                  <th class="py-3 px-3">Student Name</th>
+                  <th class="py-3 px-3 text-center">Quizzes<div class="normal-case font-semibold opacity-70">score / total</div></th>
+                  <th class="py-3 px-3 text-center">Activities<div class="normal-case font-semibold opacity-70">score / total</div></th>
+                  <th class="py-3 px-3 text-center">Attendance<div class="normal-case font-semibold opacity-70">present / days</div></th>
+                  <th class="py-3 px-3 text-center">${termLabel} Grade</th>
+                  <th class="py-3 px-3 text-center">Prelim</th>
+                  <th class="py-3 px-3 text-center">Midterm</th>
+                  <th class="py-3 px-3 text-center">Pre-Final</th>
+                  <th class="py-3 px-3 text-center">Avg %</th>
+                  <th class="py-3 px-3 text-center">Equiv</th>
+                  <th class="py-3 px-3 text-center">Status</th>
+                  <th class="py-3 px-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100 dark:divide-slate-800/60">
                 ${sectionStudents.map(st => {
-                  const g = (appState.grades[st.id] || {})[activeSub.id] || { p: '', m: '', pf: '' };
-                  const calc = calculateSubjectGrade(g);
+                  const rec = (appState.grades[st.id] || {})[activeSub.id] || { p: null, m: null, pf: null };
+                  const tc = (rec.comp || {})[term] || {};
+                  const cc = calcComponents(tc);
+                  const calc = calculateSubjectGrade(rec);
                   const statusColors = {
                     passed: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
                     failed: 'bg-rose-500/10 text-rose-600 dark:text-rose-400',
                     inc: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
                     none: 'bg-slate-500/10 text-slate-500'
                   };
+                  const pair = (f1, f2, pctVal) => `
+                    <div class="flex items-center justify-center gap-1">
+                      <input id="c_${st.id}_${f1}" type="number" min="0" step="0.5" value="${val(tc[f1])}" onchange="updateComp('${st.id}', '${activeSub.id}', '${term}', '${f1}', this.value)" class="${inputCls}" placeholder="0" />
+                      <span class="text-slate-400">/</span>
+                      <input id="c_${st.id}_${f2}" type="number" min="0" step="0.5" value="${val(tc[f2])}" onchange="updateComp('${st.id}', '${activeSub.id}', '${term}', '${f2}', this.value)" class="${inputCls}" placeholder="0" />
+                    </div>
+                    <div class="text-center text-[10px] font-mono text-slate-400 mt-1">${pctTxt(pctVal)}</div>`;
+                  const cell = k => `<td class="py-3 px-3 text-center font-mono ${k === term ? 'font-black text-brand-600 dark:text-amber-400' : ''}">${rec[k] !== null && rec[k] !== undefined ? Number(rec[k]).toFixed(1) : '-'}</td>`;
                   return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
-                      <td class="py-3 px-4">
+                      <td class="py-3 px-3">
                         <div class="font-bold text-slate-800 dark:text-slate-200">${st.name}</div>
                         <div class="text-[10px] text-slate-400 font-mono">${st.id}</div>
                       </td>
-                      <td class="py-3 px-4">
-                        <input type="number" min="0" max="100" step="0.1" value="${g.p !== null && g.p !== undefined ? g.p : ''}" onchange="updateGradeScore('${st.id}', '${activeSub.id}', 'p', this.value)" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 font-mono text-xs text-center focus:outline-none focus:border-amber-400" />
-                      </td>
-                      <td class="py-3 px-4">
-                        <input type="number" min="0" max="100" step="0.1" value="${g.m !== null && g.m !== undefined ? g.m : ''}" onchange="updateGradeScore('${st.id}', '${activeSub.id}', 'm', this.value)" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 font-mono text-xs text-center focus:outline-none focus:border-amber-400" />
-                      </td>
-                      <td class="py-3 px-4">
-                        <input type="number" min="0" max="100" step="0.1" value="${g.pf !== null && g.pf !== undefined ? g.pf : ''}" onchange="updateGradeScore('${st.id}', '${activeSub.id}', 'pf', this.value)" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 font-mono text-xs text-center focus:outline-none focus:border-amber-400" />
-                      </td>
-                      <td class="py-3 px-4 text-center font-mono font-semibold">${calc.pct !== null ? calc.pct.toFixed(1) + '%' : '-'}</td>
-                      <td class="py-3 px-4 text-center font-mono font-black text-brand-600 dark:text-amber-400">${formatGradeEq(calc.eq)}</td>
-                      <td class="py-3 px-4 text-center">
+                      <td class="py-3 px-3">${pair('qs', 'qt', cc.q)}</td>
+                      <td class="py-3 px-3">${pair('acs', 'act', cc.a)}</td>
+                      <td class="py-3 px-3">${pair('ap', 'ad', cc.att)}</td>
+                      <td class="py-3 px-3 text-center font-mono font-black text-brand-600 dark:text-amber-400">${rec[term] !== null && rec[term] !== undefined ? Number(rec[term]).toFixed(1) + '%' : '-'}</td>
+                      ${cell('p')}${cell('m')}${cell('pf')}
+                      <td class="py-3 px-3 text-center font-mono font-semibold">${calc.pct !== null ? calc.pct.toFixed(1) + '%' : '-'}</td>
+                      <td class="py-3 px-3 text-center font-mono font-black text-brand-600 dark:text-amber-400">${formatGradeEq(calc.eq)}</td>
+                      <td class="py-3 px-3 text-center">
                         <span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${statusColors[calc.status]}">
                           ${calc.status}
                         </span>
                       </td>
-                      <td class="py-3 px-4 text-right">
+                      <td class="py-3 px-3 text-right">
                         <button type="button" onclick="openTranscriptModal('${st.id}')" class="px-3 py-1.5 rounded-lg bg-brand-500/10 text-brand-600 dark:text-brand-400 hover:bg-brand-500 hover:text-white font-bold transition-all text-xs">
-                          PDF Transcript
+                          PDF
                         </button>
                       </td>
                     </tr>
@@ -980,6 +1080,11 @@ function renderGradeEntryPage() {
       </div>
     </div>
   `;
+}
+
+function setEntryTerm(key) {
+  uiState.entryFilter.term = key;
+  renderApp();
 }
 
 function updateEntryCourse(val) {
@@ -1005,15 +1110,61 @@ function updateEntrySearch(val) {
   uiState.entryFilter.search = val;
 }
 
-function updateGradeScore(studentId, subjectId, termKey, val) {
-  if (!appState.grades[studentId]) appState.grades[studentId] = {};
-  if (!appState.grades[studentId][subjectId]) appState.grades[studentId][subjectId] = { p: null, m: null, pf: null };
-  
-  const num = val === '' ? null : parseFloat(val);
-  appState.grades[studentId][subjectId][termKey] = isNaN(num) ? null : num;
-  saveState();
+function rerenderKeepPosition() {
+  const activeId = document.activeElement && document.activeElement.id;
+  const main = document.querySelector('main');
+  const mainTop = main ? main.scrollTop : 0;
+  const sc = document.getElementById('entryScroll');
+  const left = sc ? sc.scrollLeft : 0;
   renderApp();
-  showToast('Grade updated successfully!', 'success');
+  const main2 = document.querySelector('main');
+  if (main2) main2.scrollTop = mainTop;
+  const sc2 = document.getElementById('entryScroll');
+  if (sc2) sc2.scrollLeft = left;
+  if (activeId) {
+    const el = document.getElementById(activeId);
+    if (el) { el.focus(); if (el.select) el.select(); }
+  }
+}
+
+function updateComp(studentId, subjectId, termKey, field, rawVal) {
+  // Only teachers may change grades. Students have no edit access.
+  if (!isTeacherSession()) {
+    showToast('Only teachers can edit grades.', 'error');
+    return;
+  }
+  const num = rawVal === '' ? null : parseFloat(rawVal);
+  if (rawVal !== '' && (isNaN(num) || num < 0)) {
+    showToast('Please enter a valid number (0 or higher).', 'error');
+    setTimeout(rerenderKeepPosition, 0);
+    return;
+  }
+
+  if (!appState.grades[studentId]) appState.grades[studentId] = {};
+  const rec = appState.grades[studentId][subjectId] || (appState.grades[studentId][subjectId] = { p: null, m: null, pf: null });
+  if (!rec.comp) rec.comp = {};
+  const tc = rec.comp[termKey] || (rec.comp[termKey] = { qs: null, qt: null, acs: null, act: null, ap: null, ad: null });
+
+  const prev = tc[field];
+  tc[field] = num;
+
+  // score / present can never be higher than total / days
+  const bad = COMP_PAIRS.find(([sc, tt]) => tc[sc] !== null && tc[tt] !== null && tc[sc] > tc[tt]);
+  if (bad) {
+    tc[field] = prev;
+    showToast(bad[0] === 'ap' ? 'Days present cannot be more than total days.' : 'Score cannot be higher than the total points.', 'error');
+    setTimeout(rerenderKeepPosition, 0);
+    return;
+  }
+
+  const allEmpty = Object.values(tc).every(v => v === null);
+  const tg = calcTermGrade(tc);
+  rec[termKey] = tg;            // null until quizzes, activities and attendance are all filled in
+  if (allEmpty) delete rec.comp[termKey];
+
+  saveState();
+  setTimeout(rerenderKeepPosition, 0);
+  showToast('Saved', 'success');
 }
 
 /* ==========================================================================
@@ -1510,6 +1661,30 @@ function renderSettingsPage() {
 
       <div class="glass-panel p-6 rounded-2xl space-y-4">
         <div>
+          <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">Grade Computation Weights</h2>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Term grade = Quizzes + Activities + Attendance, using these percentages (must total 100%). Saving recomputes all term grades.</p>
+        </div>
+        <form onsubmit="handleSaveWeights(event)" class="grid grid-cols-3 gap-3">
+          <div class="space-y-1">
+            <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Quizzes %</label>
+            <input type="number" id="wQuiz" min="0" max="100" step="1" required value="${s.weights.quiz}" class="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" />
+          </div>
+          <div class="space-y-1">
+            <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Activities %</label>
+            <input type="number" id="wActivity" min="0" max="100" step="1" required value="${s.weights.activity}" class="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" />
+          </div>
+          <div class="space-y-1">
+            <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Attendance %</label>
+            <input type="number" id="wAttendance" min="0" max="100" step="1" required value="${s.weights.attendance}" class="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" />
+          </div>
+          <div class="col-span-3 flex justify-end">
+            <button type="submit" class="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-md transition-all">Save Weights</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="glass-panel p-6 rounded-2xl space-y-4">
+        <div>
           <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">Teacher Accounts</h2>
           <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Add faculty members who can sign in to the Teacher Portal.</p>
         </div>
@@ -1570,9 +1745,31 @@ function handleRemoveTeacher(username) {
   showToast('Teacher account removed.', 'success');
 }
 
+function handleSaveWeights(e) {
+  e.preventDefault();
+  if (!isTeacherSession()) return;
+  const quiz = parseFloat(document.getElementById('wQuiz').value);
+  const activity = parseFloat(document.getElementById('wActivity').value);
+  const attendance = parseFloat(document.getElementById('wAttendance').value);
+  if ([quiz, activity, attendance].some(v => isNaN(v) || v < 0)) {
+    showToast('Enter valid percentages.', 'error');
+    return;
+  }
+  if (Math.abs(quiz + activity + attendance - 100) > 0.001) {
+    showToast(`Weights must total 100% (currently ${quiz + activity + attendance}%).`, 'error');
+    return;
+  }
+  appState.settings.weights = { quiz, activity, attendance };
+  recomputeAllTermGrades();
+  saveState();
+  renderApp();
+  showToast('Weights saved. All term grades recomputed.', 'success');
+}
+
 function handleSaveSettings(e) {
   e.preventDefault();
   appState.settings = {
+    ...appState.settings,
     school: document.getElementById('setSchool').value.trim(),
     registrar: document.getElementById('setRegistrar').value.trim(),
     term: document.getElementById('setTerm').value.trim()
@@ -1644,6 +1841,23 @@ function renderStudentDashboard() {
         <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">Official 3–Term Grade Breakdown</h2>
         <div id="gradeCanvasWrap" class="overflow-x-auto protected-grades" oncontextmenu="return false" ondragstart="return false">
           <canvas id="gradeCanvas" role="img" aria-label="Official grade breakdown (image)" oncontextmenu="return false"></canvas>
+        </div>
+      </div>
+
+      <div class="glass-panel p-6 rounded-2xl space-y-4">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div>
+            <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">Class Standing Breakdown</h2>
+            <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Quizzes ${getWeights().quiz}% + Activities ${getWeights().activity}% + Attendance ${getWeights().attendance}% • View only</p>
+          </div>
+          <div class="flex rounded-xl bg-slate-200/80 dark:bg-slate-800/80 p-1 border border-slate-300 dark:border-slate-700/60 w-full md:w-auto">
+            ${TERMS.map(t => `
+              <button type="button" onclick="setStudentTerm('${t.key}')" class="flex-1 md:flex-none px-5 py-2 text-xs font-bold rounded-lg transition-all ${uiState.studentTerm === t.key ? 'bg-brand-500 text-white shadow-md' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}">${t.label}</button>
+            `).join('')}
+          </div>
+        </div>
+        <div id="compCanvasWrap" class="overflow-x-auto protected-grades" oncontextmenu="return false" ondragstart="return false">
+          <canvas id="compCanvas" role="img" aria-label="Quizzes, activities and attendance breakdown (image)" oncontextmenu="return false"></canvas>
         </div>
       </div>
     </div>
@@ -2020,10 +2234,108 @@ function drawGradeCanvas() {
   });
 }
 
+function setStudentTerm(key) {
+  uiState.studentTerm = key;
+  renderApp();
+}
+
+function drawCompCanvas() {
+  const canvas = document.getElementById('compCanvas');
+  const wrap = document.getElementById('compCanvasWrap');
+  if (!canvas || !wrap || !authUser || authUser.role !== 'student') return;
+  const student = appState.students.find(s => s.id === authUser.studentId);
+  if (!student) return;
+  const sm = getStudentSummary(student);
+  const term = uiState.studentTerm || 'p';
+
+  const dark = uiState.darkMode;
+  const C = dark
+    ? { text: '#e2e8f0', muted: '#94a3b8', line: 'rgba(148,163,184,0.18)', code: '#fbbf24', accent: '#fbbf24' }
+    : { text: '#1e293b', muted: '#94a3b8', line: 'rgba(148,163,184,0.35)', code: '#002B66', accent: '#002B66' };
+
+  const cols = [
+    { w: 90, align: 'left', label: 'CODE', font: 'code' },
+    { w: 0, align: 'left', label: 'SUBJECT TITLE', font: 'title' },
+    { w: 110, align: 'center', label: 'QUIZZES', font: 'mono' },
+    { w: 80, align: 'center', label: 'QUIZ %', font: 'mono' },
+    { w: 110, align: 'center', label: 'ACTIVITIES', font: 'mono' },
+    { w: 90, align: 'center', label: 'ACTIVITY %', font: 'mono' },
+    { w: 110, align: 'center', label: 'ATTENDANCE', font: 'mono' },
+    { w: 100, align: 'center', label: 'ATTEND. %', font: 'mono' },
+    { w: 100, align: 'center', label: 'TERM GRADE', font: 'grade' }
+  ];
+  const fixed = cols.reduce((a, c) => a + c.w, 0);
+  const W = Math.max(wrap.clientWidth || 0, fixed + 260);
+  cols[1].w = W - fixed;
+
+  const headerH = 44, rowH = 48, H = headerH + rowH * sm.rows.length + 4;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  canvas.style.display = 'block';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const SANS = '"Plus Jakarta Sans", sans-serif';
+  const MONO = '"JetBrains Mono", monospace';
+  const colX = [];
+  let x = 0;
+  cols.forEach(c => { colX.push(x); x += c.w; });
+  const place = (c, i) => c.align === 'left' ? colX[i] + 16 : colX[i] + c.w / 2;
+  const fit = (text, maxW) => {
+    if (ctx.measureText(text).width <= maxW) return text;
+    while (text.length > 1 && ctx.measureText(text + '…').width > maxW) text = text.slice(0, -1);
+    return text + '…';
+  };
+  const pairTxt = (a, b) => (a === null || a === undefined || b === null || b === undefined || a === '' || b === '') ? '-' : `${a} / ${b}`;
+  const pctTxt = v => (v === null || v === undefined) ? '-' : v.toFixed(1) + '%';
+
+  ctx.textBaseline = 'middle';
+  ctx.font = `700 10px ${SANS}`;
+  cols.forEach((c, i) => {
+    ctx.fillStyle = C.muted;
+    ctx.textAlign = c.align === 'left' ? 'left' : 'center';
+    ctx.fillText(c.label, place(c, i), headerH / 2);
+  });
+  ctx.strokeStyle = C.line; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, headerH + 0.5); ctx.lineTo(W, headerH + 0.5); ctx.stroke();
+
+  sm.rows.forEach((r, ri) => {
+    const cy = headerH + ri * rowH + rowH / 2;
+    const rec = r.g || {};
+    const tc = (rec.comp || {})[term] || {};
+    const cc = calcComponents(tc);
+    const tg = rec[term];
+    const vals = [
+      r.sub.code, r.sub.title,
+      pairTxt(tc.qs, tc.qt), pctTxt(cc.q),
+      pairTxt(tc.acs, tc.act), pctTxt(cc.a),
+      pairTxt(tc.ap, tc.ad), pctTxt(cc.att),
+      (tg === null || tg === undefined) ? '-' : Number(tg).toFixed(1) + '%'
+    ];
+    cols.forEach((c, i) => {
+      ctx.textAlign = c.align === 'left' ? 'left' : 'center';
+      if (c.font === 'code') { ctx.font = `700 12px ${MONO}`; ctx.fillStyle = C.code; }
+      else if (c.font === 'title') { ctx.font = `600 12px ${SANS}`; ctx.fillStyle = C.text; }
+      else if (c.font === 'grade') { ctx.font = `800 13px ${MONO}`; ctx.fillStyle = C.accent; }
+      else { ctx.font = `400 12px ${MONO}`; ctx.fillStyle = C.text; }
+      const t = c.font === 'title' ? fit(String(vals[i]), c.w - 24) : String(vals[i]);
+      ctx.fillText(t, place(c, i), cy);
+    });
+    if (ri < sm.rows.length - 1) {
+      ctx.strokeStyle = C.line;
+      ctx.beginPath(); ctx.moveTo(0, headerH + (ri + 1) * rowH + 0.5); ctx.lineTo(W, headerH + (ri + 1) * rowH + 0.5); ctx.stroke();
+    }
+  });
+}
+
 let gradeCanvasResizeTimer = null;
 window.addEventListener('resize', () => {
   clearTimeout(gradeCanvasResizeTimer);
-  gradeCanvasResizeTimer = setTimeout(drawGradeCanvas, 150);
+  gradeCanvasResizeTimer = setTimeout(() => { drawGradeCanvas(); drawCompCanvas(); }, 150);
 });
 
 function renderApp() {
@@ -2035,7 +2347,8 @@ function renderApp() {
   } else {
     root.innerHTML = renderMainLayout();
     drawGradeCanvas();
-    if (document.fonts && document.fonts.ready) document.fonts.ready.then(drawGradeCanvas);
+    drawCompCanvas();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { drawGradeCanvas(); drawCompCanvas(); });
   }
 }
 
