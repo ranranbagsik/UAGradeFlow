@@ -2601,7 +2601,7 @@ function drawGradeCanvas() {
 
   const SANS = '"Plus Jakarta Sans", sans-serif';
   const MONO = '"JetBrains Mono", monospace';
-  const fmt = v => (v === null || v === undefined || v === '') ? '-' : String(v);
+  const fmt = v => (v === null || v === undefined || v === '' || isNaN(Number(v))) ? '-' : Number(v).toFixed(1);
 
   const fit = (text, maxW) => {
     if (ctx.measureText(text).width <= maxW) return text;
