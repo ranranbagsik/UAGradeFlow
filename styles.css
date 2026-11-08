@@ -67,3 +67,16 @@ background: rgba(75, 85, 99, 0.5);
     max-width: 300px;
   }
 }
+
+/* Transparent shield over student grades (prevents selecting / right-clicking the numbers) */
+.protected-grades {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.grade-shield {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: transparent;
+  cursor: default;
+}
