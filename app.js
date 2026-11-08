@@ -1134,6 +1134,9 @@ function renderStudentsPage() {
                       <button type="button" onclick="openTranscriptModal('${st.id}')" class="px-3 py-1.5 rounded-lg bg-brand-500/10 text-brand-600 dark:text-brand-400 hover:bg-brand-500 hover:text-white font-bold transition-all text-xs">
                         Transcript
                       </button>
+                      <button type="button" onclick="resetStudentPassword('${st.id}')" class="px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white font-bold transition-all text-xs">
+                        Set Password
+                      </button>
                       <button type="button" onclick="deleteStudent('${st.id}')" class="px-2.5 py-1.5 rounded-lg bg-rose-500/10 text-rose-600 hover:bg-rose-500 hover:text-white font-bold transition-all text-xs">
                         Delete
                       </button>
@@ -1183,6 +1186,18 @@ function handleManualStudentAdd(e, sectionId, courseCode) {
   saveState();
   renderApp();
   showToast(`Successfully enrolled ${name} into ${sectionId}!`, 'success');
+}
+
+function resetStudentPassword(id) {
+  const st = appState.students.find(s => s.id === id);
+  if (!st) return;
+  const input = prompt(`Set a new password for ${st.name}.\nLeave blank to generate a random one.`, '');
+  if (input === null) return;
+  const pw = input.trim() || String(100000 + Math.floor(Math.random() * 900000));
+  st.password = pw;
+  saveState();
+  renderApp();
+  showToast(`New password for ${st.name}: ${pw}`, 'success');
 }
 
 function deleteStudent(id) {
@@ -1627,44 +1642,8 @@ function renderStudentDashboard() {
 
       <div class="glass-panel p-6 rounded-2xl space-y-4">
         <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">Official 3–Term Grade Breakdown</h2>
-        <div class="overflow-x-auto">
-          <table class="w-full text-left text-xs">
-            <thead>
-              <tr class="border-b border-slate-200 dark:border-slate-800 text-slate-400 uppercase font-bold text-[10px]">
-                <th class="py-3 px-4">Code</th>
-                <th class="py-3 px-4">Subject Title</th>
-                <th class="py-3 px-4 text-center">Units</th>
-                <th class="py-3 px-4 text-center">Prelim</th>
-                <th class="py-3 px-4 text-center">Midterm</th>
-                <th class="py-3 px-4 text-center">Pre-Final</th>
-                <th class="py-3 px-4 text-center">Average %</th>
-                <th class="py-3 px-4 text-center">Grade</th>
-                <th class="py-3 px-4 text-center">Status</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-slate-100 dark:divide-slate-800/60">
-              ${sm.rows.map(r => {
-                const g = r.g || { p: '-', m: '-', pf: '-' };
-                return `
-                  <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
-                    <td class="py-3 px-4 font-mono font-bold text-brand-600 dark:text-amber-400">${r.sub.code}</td>
-                    <td class="py-3 px-4 font-semibold text-slate-800 dark:text-slate-200">${r.sub.title}</td>
-                    <td class="py-3 px-4 text-center font-mono">${r.sub.units}</td>
-                    <td class="py-3 px-4 text-center font-mono">${g.p ?? '-'}</td>
-                    <td class="py-3 px-4 text-center font-mono">${g.m ?? '-'}</td>
-                    <td class="py-3 px-4 text-center font-mono">${g.pf ?? '-'}</td>
-                    <td class="py-3 px-4 text-center font-mono font-semibold">${r.calc.pct !== null ? r.calc.pct.toFixed(1) + '%' : '-'}</td>
-                    <td class="py-3 px-4 text-center font-mono font-black text-brand-600 dark:text-amber-400">${formatGradeEq(r.calc.eq)}</td>
-                    <td class="py-3 px-4 text-center">
-                      <span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${r.calc.status === 'passed' ? 'bg-emerald-500/10 text-emerald-600' : r.calc.status === 'failed' ? 'bg-rose-500/10 text-rose-600' : 'bg-amber-500/10 text-amber-600'}">
-                        ${r.calc.status}
-                      </span>
-                    </td>
-                  </tr>
-                `;
-              }).join('')}
-            </tbody>
-          </table>
+        <div id="gradeCanvasWrap" class="overflow-x-auto protected-grades" oncontextmenu="return false" ondragstart="return false">
+          <canvas id="gradeCanvas" role="img" aria-label="Official grade breakdown (image)" oncontextmenu="return false"></canvas>
         </div>
       </div>
     </div>
@@ -1921,6 +1900,132 @@ function openGmailWebDraft() {
 /* ==========================================================================
    16. APPLICATION BOOTSTRAP & INITIALIZATION
    ========================================================================== */
+/* ==========================================================================
+   Student grade table drawn as an image (canvas) so the numbers are not
+   present as text in the page's HTML.
+   ========================================================================== */
+function drawGradeCanvas() {
+  const canvas = document.getElementById('gradeCanvas');
+  const wrap = document.getElementById('gradeCanvasWrap');
+  if (!canvas || !wrap || !authUser || authUser.role !== 'student') return;
+  const student = appState.students.find(s => s.id === authUser.studentId);
+  if (!student) return;
+  const sm = getStudentSummary(student);
+
+  const dark = uiState.darkMode;
+  const C = dark ? {
+    text: '#e2e8f0', muted: '#94a3b8', line: 'rgba(148,163,184,0.18)', code: '#fbbf24', grade: '#fbbf24',
+    passedBg: 'rgba(16,185,129,0.15)', passedFg: '#34d399', failedBg: 'rgba(244,63,94,0.15)', failedFg: '#fb7185',
+    otherBg: 'rgba(245,158,11,0.15)', otherFg: '#fbbf24'
+  } : {
+    text: '#1e293b', muted: '#94a3b8', line: 'rgba(148,163,184,0.35)', code: '#002B66', grade: '#002B66',
+    passedBg: 'rgba(16,185,129,0.12)', passedFg: '#059669', failedBg: 'rgba(244,63,94,0.12)', failedFg: '#e11d48',
+    otherBg: 'rgba(245,158,11,0.15)', otherFg: '#d97706'
+  };
+
+  const cols = [
+    { key: 'code', w: 96, align: 'left', label: 'CODE' },
+    { key: 'title', w: 0, align: 'left', label: 'SUBJECT TITLE' },
+    { key: 'units', w: 64, align: 'center', label: 'UNITS' },
+    { key: 'p', w: 80, align: 'center', label: 'PRELIM' },
+    { key: 'm', w: 84, align: 'center', label: 'MIDTERM' },
+    { key: 'pf', w: 90, align: 'center', label: 'PRE-FINAL' },
+    { key: 'pct', w: 100, align: 'center', label: 'AVERAGE %' },
+    { key: 'eq', w: 80, align: 'center', label: 'GRADE' },
+    { key: 'status', w: 120, align: 'center', label: 'STATUS' }
+  ];
+  const fixed = cols.reduce((a, c) => a + c.w, 0);
+  const W = Math.max(wrap.clientWidth || 0, fixed + 280);
+  cols.find(c => c.key === 'title').w = W - fixed;
+
+  const headerH = 44, rowH = 52, H = headerH + rowH * sm.rows.length + 4;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  canvas.style.display = 'block';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const SANS = '"Plus Jakarta Sans", sans-serif';
+  const MONO = '"JetBrains Mono", monospace';
+  const fmt = v => (v === null || v === undefined || v === '') ? '-' : String(v);
+
+  const fit = (text, maxW) => {
+    if (ctx.measureText(text).width <= maxW) return text;
+    while (text.length > 1 && ctx.measureText(text + '…').width > maxW) text = text.slice(0, -1);
+    return text + '…';
+  };
+
+  const colX = [];
+  let x = 0;
+  cols.forEach(c => { colX.push(x); x += c.w; });
+  const place = (c, i, pad = 16) => c.align === 'left' ? colX[i] + pad : colX[i] + c.w / 2;
+
+  // header
+  ctx.textBaseline = 'middle';
+  ctx.font = `700 10px ${SANS}`;
+  cols.forEach((c, i) => {
+    ctx.fillStyle = C.muted;
+    ctx.textAlign = c.align === 'left' ? 'left' : 'center';
+    ctx.fillText(c.label, place(c, i), headerH / 2);
+  });
+  ctx.strokeStyle = C.line; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, headerH + 0.5); ctx.lineTo(W, headerH + 0.5); ctx.stroke();
+
+  // rows
+  sm.rows.forEach((r, ri) => {
+    const cy = headerH + ri * rowH + rowH / 2;
+    const g = r.g || {};
+    const status = r.calc.status;
+    const vals = {
+      code: r.sub.code, title: r.sub.title, units: r.sub.units,
+      p: fmt(g.p), m: fmt(g.m), pf: fmt(g.pf),
+      pct: r.calc.pct !== null ? r.calc.pct.toFixed(1) + '%' : '-',
+      eq: formatGradeEq(r.calc.eq)
+    };
+
+    cols.forEach((c, i) => {
+      if (c.key === 'status') return;
+      ctx.textAlign = c.align === 'left' ? 'left' : 'center';
+      if (c.key === 'code') { ctx.font = `700 12px ${MONO}`; ctx.fillStyle = C.code; }
+      else if (c.key === 'title') { ctx.font = `600 12px ${SANS}`; ctx.fillStyle = C.text; }
+      else if (c.key === 'eq') { ctx.font = `800 13px ${MONO}`; ctx.fillStyle = C.grade; }
+      else if (c.key === 'pct') { ctx.font = `600 12px ${MONO}`; ctx.fillStyle = C.text; }
+      else { ctx.font = `400 12px ${MONO}`; ctx.fillStyle = C.text; }
+      const t = c.key === 'title' ? fit(String(vals.title), c.w - 24) : String(vals[c.key]);
+      ctx.fillText(t, place(c, i), cy);
+    });
+
+    // status pill
+    const si = cols.length - 1, sc = cols[si];
+    const label = status.toUpperCase();
+    ctx.font = `700 10px ${SANS}`;
+    const pw = ctx.measureText(label).width + 22, ph = 22;
+    const px = colX[si] + sc.w / 2 - pw / 2, py = cy - ph / 2;
+    ctx.fillStyle = status === 'passed' ? C.passedBg : status === 'failed' ? C.failedBg : C.otherBg;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(px, py, pw, ph, 11); else ctx.rect(px, py, pw, ph);
+    ctx.fill();
+    ctx.fillStyle = status === 'passed' ? C.passedFg : status === 'failed' ? C.failedFg : C.otherFg;
+    ctx.textAlign = 'center';
+    ctx.fillText(label, colX[si] + sc.w / 2, cy + 0.5);
+
+    if (ri < sm.rows.length - 1) {
+      ctx.strokeStyle = C.line;
+      ctx.beginPath(); ctx.moveTo(0, headerH + (ri + 1) * rowH + 0.5); ctx.lineTo(W, headerH + (ri + 1) * rowH + 0.5); ctx.stroke();
+    }
+  });
+}
+
+let gradeCanvasResizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(gradeCanvasResizeTimer);
+  gradeCanvasResizeTimer = setTimeout(drawGradeCanvas, 150);
+});
+
 function renderApp() {
   const root = document.getElementById('app');
   if (!root) return;
@@ -1929,8 +2034,26 @@ function renderApp() {
     root.innerHTML = renderLoginPage();
   } else {
     root.innerHTML = renderMainLayout();
+    drawGradeCanvas();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(drawGradeCanvas);
   }
 }
+
+/* Deterrents for student view: block right-click, copy and common dev-tool shortcuts */
+function isStudentSession() {
+  return authUser && authUser.role === 'student';
+}
+document.addEventListener('contextmenu', e => { if (isStudentSession()) e.preventDefault(); });
+document.addEventListener('copy', e => { if (isStudentSession()) e.preventDefault(); });
+document.addEventListener('selectstart', e => { if (isStudentSession()) e.preventDefault(); });
+document.addEventListener('keydown', e => {
+  if (!isStudentSession()) return;
+  const k = e.key.toLowerCase();
+  const blocked = e.key === 'F12' ||
+    (e.ctrlKey && e.shiftKey && ['i', 'j', 'c'].includes(k)) ||
+    (e.ctrlKey && ['u', 's', 'c', 'a'].includes(k));
+  if (blocked) e.preventDefault();
+});
 
 document.addEventListener('DOMContentLoaded', () => {
   renderApp();
