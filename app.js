@@ -2484,17 +2484,12 @@ function handleSaveSettings(e) {
    14. STUDENT DASHBOARD VIEW
    ========================================================================== */
 function renderStudentDashboard() {
-  console.log("--- DASHBOARD DEBUG ---");
-  console.log("window.appState:", window.appState);
-  console.log("appState.students:", appState.students);
+  const currentStudentId = authUser?.studentId || 
+                           authUser?.id || 
+                           JSON.parse(localStorage.getItem(AUTH_KEY) || '{}').studentId || 
+                           localStorage.getItem('studentId');
 
-  const currentStudentId = (typeof authUser !== 'undefined' ? authUser?.studentId : null) || 
-                           (typeof auth !== 'undefined' ? auth?.studentId || auth?.id : null) || 
-                           window.activeStudentId || 
-                           localStorage.getItem('studentId') ||
-                           JSON.parse(localStorage.getItem('auth') || '{}').studentId;
-
-  console.log("Resolved currentStudentId:", currentStudentId);
+  console.log("🔍 Resolved currentStudentId:", currentStudentId);
 
   let student = null;
   if (appState?.students) {
@@ -2504,7 +2499,8 @@ function renderStudentDashboard() {
     } else {
       const list = Array.isArray(appState.students) ? appState.students : Object.values(appState.students);
       const found = list.find(s => {
-        const sId = String(s.id || s.data?.id || s.data?.studentNumber || '').trim();
+        const sObj = s.data || s;
+        const sId = String(sObj.id || sObj.studentNumber || s.id || '').trim();
         return sId === String(currentStudentId).trim();
       });
       if (found) {
@@ -2513,7 +2509,7 @@ function renderStudentDashboard() {
     }
   }
 
-  console.log("Resolved student profile:", student);
+  console.log("👤 Resolved student profile:", student);
 
   if (!student) return `<div class="p-8 text-center text-xs text-slate-500">Student account not found in database.</div>`;
 
