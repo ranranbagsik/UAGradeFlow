@@ -911,34 +911,38 @@ function handleTeacherLogin(e) {
   }
 }
 
-async function handleStudentLogin(e) {
+function handleStudentLogin(e) {
   e.preventDefault();
   const number = document.getElementById('sLoginNumber').value.trim();
   const pass = document.getElementById('sLoginPass').value;
 
-  // Query Supabase directly for this student ID
-  const { data: record, error } = await supabase
-    .from('students')
-    .select('*')
-    .eq('id', number)
-    .single();
-
-  if (error || !record) {
-    showToast('Invalid student number or password.', 'error');
-    return;
+  // Handle both array and dictionary/object storage formats for students
+  let studentsList = [];
+  if (Array.isArray(appState.students)) {
+    studentsList = appState.students;
+  } else if (appState.students && typeof appState.students === 'object') {
+    studentsList = Object.values(appState.students);
   }
 
-  // Extract the student data object stored in the row
-  const st = record.data || record;
+  const stRecord = studentsList.find(s => {
+    const sData = s.data || s;
+    const studentId = s.id || sData.id || sData.studentNumber;
+    return String(studentId) === String(number);
+  });
 
-  if (st && String(st.password) === String(pass)) {
-    setAuth({ role: 'student', studentId: record.id, name: st.name });
-    showToast(`Signed in as ${st.name}`, 'success');
-  } else {
-    showToast('Invalid student number or password.', 'error');
+  if (stRecord) {
+    const sData = stRecord.data || stRecord;
+    const storedPass = sData.password;
+
+    if (String(storedPass) === String(pass)) {
+      setAuth({ role: 'student', studentId: stRecord.id || sData.id, name: sData.name });
+      showToast(`Signed in as ${sData.name}`, 'success');
+      return;
+    }
   }
+
+  showToast('Invalid student number or password.', 'error');
 }
-
 /* ==========================================================================
    6. MAIN NAVIGATION & LAYOUT (WITH ANIMATED MOBILE DRAWER)
    ========================================================================== */
