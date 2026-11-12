@@ -107,6 +107,44 @@ async function loadAppStateFromSupabase() {
     }
 }
 
+async function initializeAppFromSupabase() {
+  try {
+    console.log("Loading app state from Supabase...");
+    
+    // Fetch all core tables from Supabase
+    const tables = ['settings', 'subjects', 'courses', 'sections', 'classwork', 'teachers', 'students', 'grades', 'log'];
+    window.appState = window.appState || {};
+
+    for (const tableName of tables) {
+      const { data, error } = await supabase.from(tableName).select('*');
+      if (!error && data) {
+        if (tableName === 'settings') {
+          window.appState.settings = data[0]?.data || data[0] || {};
+        } else if (tableName === 'log') {
+          window.appState.log = data.map(row => row.data || row);
+        } else {
+          // Rebuild object dictionaries (like students[id] = data)
+          window.appState[tableName] = {};
+          data.forEach(row => {
+            window.appState[tableName][row.id] = row.data || row;
+          });
+        }
+      }
+    }
+    console.log("✅ App state successfully loaded from Supabase!", window.appState);
+    
+    // Re-render the initial view if needed
+    if (typeof renderApp === 'function') renderApp();
+  } catch (err) {
+    console.error("Error loading from Supabase:", err);
+  }
+}
+
+// Call this when your app boots up
+window.addEventListener('DOMContentLoaded', () => {
+  initializeAppFromSupabase();
+});
+
 function generateSubjectsSeed() {
   const subjects = [];
   const majors = {
