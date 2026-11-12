@@ -1,7 +1,9 @@
-// Initialize Supabase client
+// Initialize Supabase client safely
 const SUPABASE_URL = 'https://cndqeuebqtfbuebrgcxy.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable__PCVowMDvTwJUmfMcctm6w_P-DMOG25';
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+if (typeof supabase === 'undefined') {
+    var supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+}
 
 /* ==========================================================================
    1. DATA MODELS & LOCAL STORAGE MANAGEMENT
