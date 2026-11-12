@@ -2478,10 +2478,20 @@ function handleSaveSettings(e) {
    14. STUDENT DASHBOARD VIEW
    ========================================================================== */
 function renderStudentDashboard() {
-const currentStudentId = (typeof authUser !== 'undefined' ? authUser?.studentId : null) || (typeof auth !== 'undefined' ? auth?.studentId || auth?.id : null) || window.activeStudentId || localStorage.getItem('studentId');
-  
+  console.log("--- DASHBOARD DEBUG ---");
+  console.log("window.appState:", window.appState);
+  console.log("appState.students:", appState.students);
+
+  const currentStudentId = (typeof authUser !== 'undefined' ? authUser?.studentId : null) || 
+                           (typeof auth !== 'undefined' ? auth?.studentId || auth?.id : null) || 
+                           window.activeStudentId || 
+                           localStorage.getItem('studentId') ||
+                           JSON.parse(localStorage.getItem('auth') || '{}').studentId;
+
+  console.log("Resolved currentStudentId:", currentStudentId);
+
   let student = null;
-  if (appState.students) {
+  if (appState?.students) {
     if (appState.students[currentStudentId]) {
       const raw = appState.students[currentStudentId];
       student = raw.data || raw;
@@ -2496,6 +2506,8 @@ const currentStudentId = (typeof authUser !== 'undefined' ? authUser?.studentId 
       }
     }
   }
+
+  console.log("Resolved student profile:", student);
 
   if (!student) return `<div class="p-8 text-center text-xs text-slate-500">Student account not found in database.</div>`;
 
