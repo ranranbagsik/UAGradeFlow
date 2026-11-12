@@ -2488,8 +2488,8 @@ function handleSaveSettings(e) {
 function renderStudentDashboard() {
   const currentStudentId = authUser?.studentId || 
                            authUser?.id || 
-                           JSON.parse(localStorage.getItem(AUTH_KEY) || '{}').studentId || 
-                           localStorage.getItem('studentId');
+                           JSON.parse(sessionStorage.getItem(AUTH_KEY) || '{}').studentId || 
+                           sessionStorage.getItem('studentId');
 
   console.log("🔍 Resolved currentStudentId:", currentStudentId);
 
@@ -2623,7 +2623,6 @@ function renderStudentDashboard() {
     </div>
   `;
 }
-
 /* ==========================================================================
    15. TRANSCRIPT MODAL & PDF + GUARDIAN EMAIL DISPATCHER
    ========================================================================== */
