@@ -309,13 +309,13 @@ function loadAuth() {
 function setAuth(user) {
   authUser = user;
   if (user) {
-    localStorage.setItem(AUTH_KEY, JSON.stringify(user));
+    sessionStorage.setItem(AUTH_KEY, JSON.stringify(user));
     if (user.studentId) {
-      localStorage.setItem('studentId', user.studentId);
+      sessionStorage.setItem('studentId', user.studentId);
     }
   } else {
-    localStorage.removeItem(AUTH_KEY);
-    localStorage.removeItem('studentId');
+    sessionStorage.removeItem(AUTH_KEY);
+    sessionStorage.removeItem('studentId');
   }
   renderApp();
 }
