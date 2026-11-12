@@ -789,12 +789,29 @@ function togglePass(id, btn) {
   if (svg) svg.innerHTML = show ? EYE_OFF : EYE_ON;
 }
 
-function handleTeacherLogin(e) {
+async function handleTeacherLogin(e) {
   e.preventDefault();
   const username = document.getElementById('tLoginUser').value.trim().toLowerCase();
   const pass = document.getElementById('tLoginPass').value;
-  const t = (appState.teachers || []).find(x => x.username.toLowerCase() === username && x.password === pass);
-  if (t) {
+
+  // Fetch all teachers from Supabase
+  const { data: records, error } = await supabase
+    .from('teachers')
+    .select('*');
+
+  if (error || !records) {
+    showToast('Database error during login.', 'error');
+    return;
+  }
+
+  // Find the matching teacher record
+  const found = records.find(r => {
+    const t = r.data || r;
+    return (t.username || '').toLowerCase() === username && t.password === pass;
+  });
+
+  if (found) {
+    const t = found.data || found;
     setAuth({ role: 'teacher', username: t.username, name: t.name, email: t.email || '' });
     showToast(`Welcome back, ${t.name}!`, 'success');
   } else {
@@ -802,15 +819,29 @@ function handleTeacherLogin(e) {
   }
 }
 
-
-function handleStudentLogin(e) {
+async function handleStudentLogin(e) {
   e.preventDefault();
   const number = document.getElementById('sLoginNumber').value.trim();
   const pass = document.getElementById('sLoginPass').value;
-  const st = appState.students.find(s => String(s.id) === number);
-  if (st && st.password && st.password === pass) {
-    setAuth({ role: 'student', studentId: st.id, name: st.name });
-    showToast(`Signed in as ${st.name}`, 'success');
+
+  // Query Supabase directly for this student ID
+  const { data: record, error } = await supabase
+    .from('students')
+    .select('*')
+    .eq('id', number)
+    .single();
+
+  if (error || !record) {
+    showToast('Invalid student number or password.', 'error');
+    return;
+  }
+
+  // Because your table stores data inside a JSONB 'data' column
+  const stData = record.data || record;
+  
+  if (stData && stData.password === pass) {
+    setAuth({ role: 'student', studentId: record.id, name: stData.name });
+    showToast(`Signed in as ${stData.name}`, 'success');
   } else {
     showToast('Invalid student number or password.', 'error');
   }
