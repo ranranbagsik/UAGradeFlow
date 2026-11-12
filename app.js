@@ -942,53 +942,44 @@ function handleStudentLogin(e) {
   const number = document.getElementById('sLoginNumber').value.trim();
   const pass = document.getElementById('sLoginPass').value.trim();
 
-  console.log("🔍 Logging in - Input ID:", number, "| Pass:", pass);
-  console.log("📦 Current appState.students:", window.appState?.students);
+  console.log("Attempting login for ID:", number);
+  let studentObj = null;
 
-  let matchedStudent = null;
-  const studentsObj = window.appState?.students;
+  if (window.appState?.students) {
+    // Check if stored as dictionary (e.g. appState.students[number])
+    const record = window.appState.students[number];
+    if (record) {
+      studentObj = record.data || record;
+    } else {
+      // Search through entries or array
+      const studentsList = Array.isArray(window.appState.students) 
+        ? window.appState.students 
+        : Object.values(window.appState.students);
 
-  if (studentsObj) {
-    // Check if it's stored as a dictionary by ID key
-    if (studentsObj[number]) {
-      matchedStudent = studentsObj[number];
-    } 
-    // Check if it's an array
-    else if (Array.isArray(studentsObj)) {
-      matchedStudent = studentsObj.find(s => {
-        const sId = String(s.id || s.studentNumber || s.data?.id || s.data?.studentNumber || '').trim();
+      const found = studentsList.find(s => {
+        const sId = String(s.id || s.data?.id || s.data?.studentNumber || '').trim();
         return sId === number;
       });
-    } 
-    // Check object entries
-    else if (typeof studentsObj === 'object') {
-      for (const [key, val] of Object.entries(studentsObj)) {
-        const data = val?.data || val;
-        const sId = String(key || data.id || data.studentNumber || '').trim();
-        if (sId === number) {
-          matchedStudent = data;
-          break;
-        }
+
+      if (found) {
+        studentObj = found.data || found;
       }
     }
   }
 
-  const studentData = matchedStudent?.data || matchedStudent;
-  const storedPass = String(studentData?.password || studentData?.pass || '').trim();
+  console.log("Resolved student object:", studentObj);
+  const storedPassword = String(studentObj?.password || studentObj?.pass || '').trim();
 
-  console.log("👤 Found Student Data:", studentData);
-  console.log("🔑 Stored Password:", storedPass);
-
-  if (studentData && storedPass === pass) {
-    console.log("✅ Login Successful!");
+  if (studentObj && storedPassword === pass) {
+    console.log("✅ Login successful!");
     setAuth({ 
       role: 'student', 
       studentId: number, 
-      name: studentData.name || studentData.fullName || 'Student' 
+      name: studentObj.name || studentObj.fullName || 'Student' 
     });
-    showToast(`Signed in as ${studentData.name || 'Student'}`, 'success');
+    showToast(`Signed in as ${studentObj.name || 'Student'}`, 'success');
   } else {
-    console.error("❌ Login Failed: ID or Password mismatch.");
+    console.error("❌ Password mismatch. Expected:", storedPassword, "Got:", pass);
     showToast('Invalid student number or password.', 'error');
   }
 }
