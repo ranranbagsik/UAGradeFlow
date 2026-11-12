@@ -308,11 +308,17 @@ function loadAuth() {
 
 function setAuth(user) {
   authUser = user;
-  if (user) localStorage.setItem(AUTH_KEY, JSON.stringify(user));
-  else localStorage.removeItem(AUTH_KEY);
+  if (user) {
+    localStorage.setItem(AUTH_KEY, JSON.stringify(user));
+    if (user.studentId) {
+      localStorage.setItem('studentId', user.studentId);
+    }
+  } else {
+    localStorage.removeItem(AUTH_KEY);
+    localStorage.removeItem('studentId');
+  }
   renderApp();
 }
-
 function resetStateToDefault() {
   const keepTeachers = appState.teachers;
   appState = generateCleanStateData();
