@@ -884,6 +884,32 @@ function togglePass(id, btn) {
   if (svg) svg.innerHTML = show ? EYE_OFF : EYE_ON;
 }
 
+// Explicitly switch to Student Portal
+function showStudentPortal() {
+  window.activePortal = 'student';
+  const teacherView = document.getElementById('teacherPortalContainer');
+  const studentView = document.getElementById('studentPortalContainer');
+  if (teacherView) teacherView.classList.add('hidden');
+  if (studentView) studentView.classList.remove('hidden');
+  
+  // Update tab button styles if needed
+  document.getElementById('studentTabBtn')?.classList.add('active');
+  document.getElementById('teacherTabBtn')?.classList.remove('active');
+}
+
+// Explicitly switch to Teacher Portal
+function showTeacherPortal() {
+  window.activePortal = 'teacher';
+  const teacherView = document.getElementById('teacherPortalContainer');
+  const studentView = document.getElementById('studentPortalContainer');
+  if (teacherView) teacherView.classList.remove('hidden');
+  if (studentView) studentView.classList.add('hidden');
+  
+  document.getElementById('teacherTabBtn')?.classList.add('active');
+  document.getElementById('studentTabBtn')?.classList.remove('active');
+}
+
+
 function handleTeacherLogin(e) {
   e.preventDefault();
   const username = document.getElementById('tLoginUser').value.trim().toLowerCase();
@@ -914,45 +940,58 @@ function handleTeacherLogin(e) {
 function handleStudentLogin(e) {
   e.preventDefault();
   const number = document.getElementById('sLoginNumber').value.trim();
-  const pass = document.getElementById('sLoginPass').value;
+  const pass = document.getElementById('sLoginPass').value.trim();
 
-  console.log("--- LOGIN DEBUG ---");
-  console.log("Entered Student Number:", number, "(type:", typeof number, ")");
-  console.log("Entered Password:", pass, "(type:", typeof pass, ")");
-  console.log("appState.students:", appState.students);
+  console.log("🔍 Logging in - Input ID:", number, "| Pass:", pass);
+  console.log("📦 Current appState.students:", window.appState?.students);
 
-  let st = null;
-  if (appState.students) {
-    if (appState.students[number]) {
-      st = appState.students[number];
-    } else if (Array.isArray(appState.students)) {
-      st = appState.students.find(s => String(s.id || s.studentNumber || s.data?.id) === String(number));
-    } else if (typeof appState.students === 'object') {
-      for (const [key, val] of Object.entries(appState.students)) {
-        const sData = val.data || val;
-        if (String(key) === String(number) || String(sData.id) === String(number) || String(sData.studentNumber) === String(number)) {
-          st = sData;
+  let matchedStudent = null;
+  const studentsObj = window.appState?.students;
+
+  if (studentsObj) {
+    // Check if it's stored as a dictionary by ID key
+    if (studentsObj[number]) {
+      matchedStudent = studentsObj[number];
+    } 
+    // Check if it's an array
+    else if (Array.isArray(studentsObj)) {
+      matchedStudent = studentsObj.find(s => {
+        const sId = String(s.id || s.studentNumber || s.data?.id || s.data?.studentNumber || '').trim();
+        return sId === number;
+      });
+    } 
+    // Check object entries
+    else if (typeof studentsObj === 'object') {
+      for (const [key, val] of Object.entries(studentsObj)) {
+        const data = val?.data || val;
+        const sId = String(key || data.id || data.studentNumber || '').trim();
+        if (sId === number) {
+          matchedStudent = data;
           break;
         }
       }
     }
   }
 
-  console.log("Found Student Record:", st);
-  const sData = st?.data || st;
-  console.log("Extracted Student Data:", sData);
-  console.log("Stored Password in DB:", sData?.password, "(type:", typeof sData?.password, ")");
+  const studentData = matchedStudent?.data || matchedStudent;
+  const storedPass = String(studentData?.password || studentData?.pass || '').trim();
 
-  if (sData && String(sData.password || sData.pass).trim() === String(pass).trim()) {
-    console.log("✅ Password match! Logging in...");
-    setAuth({ role: 'student', studentId: number, name: sData.name || 'Student' });
-    showToast(`Signed in as ${sData.name || 'Student'}`, 'success');
+  console.log("👤 Found Student Data:", studentData);
+  console.log("🔑 Stored Password:", storedPass);
+
+  if (studentData && storedPass === pass) {
+    console.log("✅ Login Successful!");
+    setAuth({ 
+      role: 'student', 
+      studentId: number, 
+      name: studentData.name || studentData.fullName || 'Student' 
+    });
+    showToast(`Signed in as ${studentData.name || 'Student'}`, 'success');
   } else {
-    console.error("❌ Password mismatch or student not found!");
+    console.error("❌ Login Failed: ID or Password mismatch.");
     showToast('Invalid student number or password.', 'error');
   }
 }
-
 
 /* ==========================================================================
    6. MAIN NAVIGATION & LAYOUT (WITH ANIMATED MOBILE DRAWER)
