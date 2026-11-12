@@ -916,32 +916,39 @@ function handleStudentLogin(e) {
   const number = document.getElementById('sLoginNumber').value.trim();
   const pass = document.getElementById('sLoginPass').value;
 
-  // Handle both array and dictionary/object storage formats for students
-  let studentsList = [];
-  if (Array.isArray(appState.students)) {
-    studentsList = appState.students;
-  } else if (appState.students && typeof appState.students === 'object') {
-    studentsList = Object.values(appState.students);
-  }
+  console.log("Attempting login for student number:", number);
+  console.log("Available students in appState:", appState.students);
 
-  const stRecord = studentsList.find(s => {
-    const sData = s.data || s;
-    const studentId = s.id || sData.id || sData.studentNumber;
-    return String(studentId) === String(number);
-  });
-
-  if (stRecord) {
-    const sData = stRecord.data || stRecord;
-    const storedPass = sData.password;
-
-    if (String(storedPass) === String(pass)) {
-      setAuth({ role: 'student', studentId: stRecord.id || sData.id, name: sData.name });
-      showToast(`Signed in as ${sData.name}`, 'success');
-      return;
+  let st = null;
+  if (appState.students) {
+    // 1. Direct lookup if key matches
+    if (appState.students[number]) {
+      st = appState.students[number];
+    } 
+    // 2. If appState.students is an array
+    else if (Array.isArray(appState.students)) {
+      st = appState.students.find(s => String(s.id || s.studentNumber || s.data?.id) === String(number));
+    } 
+    // 3. Search through object dictionary entries
+    else if (typeof appState.students === 'object') {
+      for (const [key, val] of Object.entries(appState.students)) {
+        const sData = val.data || val;
+        if (String(key) === String(number) || String(sData.id) === String(number) || String(sData.studentNumber) === String(number)) {
+          st = sData;
+          break;
+        }
+      }
     }
   }
 
-  showToast('Invalid student number or password.', 'error');
+  const sData = st?.data || st;
+
+  if (sData && String(sData.password || sData.pass) === String(pass)) {
+    setAuth({ role: 'student', studentId: number, name: sData.name || 'Student' });
+    showToast(`Signed in as ${sData.name || 'Student'}`, 'success');
+  } else {
+    showToast('Invalid student number or password.', 'error');
+  }
 }
 /* ==========================================================================
    6. MAIN NAVIGATION & LAYOUT (WITH ANIMATED MOBILE DRAWER)
