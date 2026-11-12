@@ -884,31 +884,28 @@ function togglePass(id, btn) {
   if (svg) svg.innerHTML = show ? EYE_OFF : EYE_ON;
 }
 
-async function handleTeacherLogin(e) {
+function handleTeacherLogin(e) {
   e.preventDefault();
   const username = document.getElementById('tLoginUser').value.trim().toLowerCase();
   const pass = document.getElementById('tLoginPass').value;
 
-  // Fetch all teachers from Supabase
-  const { data: records, error } = await supabase
-    .from('teachers')
-    .select('*');
-
-  if (error || !records) {
-    showToast('Database error during login.', 'error');
-    return;
+  // Ensure appState.teachers exists and handle both array or object dictionary formats
+  let teachersList = [];
+  if (Array.isArray(appState.teachers)) {
+    teachersList = appState.teachers;
+  } else if (appState.teachers && typeof appState.teachers === 'object') {
+    teachersList = Object.values(appState.teachers);
   }
 
-  // Find the matching teacher record
-  const found = records.find(r => {
-    const t = r.data || r;
-    return (t.username || '').toLowerCase() === username && t.password === pass;
+  const t = teachersList.find(x => {
+    const teacherData = x.data || x;
+    return (teacherData.username || '').toLowerCase() === username && teacherData.password === pass;
   });
 
-  if (found) {
-    const t = found.data || found;
-    setAuth({ role: 'teacher', username: t.username, name: t.name, email: t.email || '' });
-    showToast(`Welcome back, ${t.name}!`, 'success');
+  if (t) {
+    const teacherData = t.data || t;
+    setAuth({ role: 'teacher', username: teacherData.username, name: teacherData.name, email: teacherData.email || '' });
+    showToast(`Welcome back, ${teacherData.name}!`, 'success');
   } else {
     showToast('Invalid faculty username or password.', 'error');
   }
