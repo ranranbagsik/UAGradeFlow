@@ -165,6 +165,8 @@ const TERMS = [
   { key: 'm', label: 'Midterm' },
   { key: 'pf', label: 'Pre-Final' }
 ];
+// Prelim & Midterm: Class Standing x2, Exam x1.  Pre-Final: Class Standing x1, Exam x2.
+const TERM_MULT = { p: { cs: 2, ex: 1 }, m: { cs: 2, ex: 1 }, pf: { cs: 1, ex: 2 } };
 const ATT_STATUS = {
   P: { label: 'Present', tone: 'pass' },
   L: { label: 'Late', tone: 'warn' },
@@ -246,14 +248,15 @@ function computeTermBreakdown(student, subjectId, termKey) {
   const attPct = counted > 0 ? ((present + late) / counted) * 100 : null;
 
   // The term grade needs all four parts to have at least one recorded value
-  let term = null;
+  let term = null, cs = null;
   if (quiz && act && exam && attPct !== null) {
-    const w = getWeights();
-    const totalW = (w.quiz + w.activity + w.exam + w.attendance) || 100;
-    term = (quiz.pct * w.quiz + act.pct * w.activity + exam.pct * w.exam + attPct * w.attendance) / totalW;
+    const w = getWeights(), m = TERM_MULT[termKey] || TERM_MULT.p;
+    const cwTot = (w.quiz + w.activity + w.attendance) || 1;
+    cs = (quiz.pct * w.quiz + act.pct * w.activity + attPct * w.attendance) / cwTot;   // Class Standing %
+    term = (cs * m.cs + exam.pct * m.ex) / (m.cs + m.ex);
   }
 
-  return { cw, quiz, act, exam, attendance: { pct: attPct, present, late, absent, excused, counted }, term };
+  return { cw, quiz, act, exam, attendance: { pct: attPct, present, late, absent, excused, counted }, term, cs };
 }
 
 function syncTermGrade(student, subjectId, termKey) {
@@ -361,166 +364,158 @@ function getStudentSummary(student) {
 /* ==========================================================================
    3. CSV FILE IMPORT & EXPORT ENGINE
    ========================================================================== */
-function downloadCSVTemplate(sectionId) {
-  const sampleStudents = [
-    { id: '2026000101', name: 'Maria Clarissa Santos', course: sectionId.split('-')[0], section: sectionId, email: 'maria.santos@student.ua.edu.ph', pName: 'Juan Santos', pEmail: 'parent.santos@example.com', pin: '123456', password: '482915' },
-    { id: '2026000102', name: 'Juan Miguel Dela Cruz', course: sectionId.split('-')[0], section: sectionId, email: 'juan.delacruz@student.ua.edu.ph', pName: 'Maria Dela Cruz', pEmail: 'parent.delacruz@example.com', pin: '654321', password: '736204' }
-  ];
-  
-  const sectionSubjects = appState.subjects.filter(s => s.course === sectionId.split('-')[0]);
-  
-  let csvContent = `School ID,Student Name,Course,Section,Student Email,Guardian Name,Guardian Email,Guardian PIN`;
-  sectionSubjects.forEach(sub => {
-    csvContent += `,${sub.code}_Prelim,${sub.code}_Midterm,${sub.code}_PreFinal`;
-  });
-  csvContent += `,Student Password\n`;
+const BTN_GRAY = 'px-3 py-2 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-all';
+const BTN_BLUE = 'px-3 py-2 rounded-xl bg-brand-500/10 text-brand-600 dark:text-brand-400 hover:bg-brand-500 hover:text-white text-xs font-bold transition-all';
+const BTN_GOLD = 'px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold cursor-pointer shadow-md transition-all';
+const TERM_NAME = { p: 'Prelim', m: 'Midterm', pf: 'PreFinal' };
+const TERM_FILE = { p: 'Prelim', m: 'Midterm', pf: 'Final' };
+const rndCode = () => String(100000 + Math.floor(Math.random() * 900000));
+const sectionCourse = id => (appState.sections.find(s => s.id === id) || {}).course || String(id).split('-')[0];
 
-  sampleStudents.forEach(st => {
-    let row = `"${st.id}","${st.name}","${st.course}","${st.section}","${st.email}","${st.pName}","${st.pEmail}","${st.pin}"`;
-    sectionSubjects.forEach(() => {
-      row += `,90,92,94`;
-    });
-    row += `,"${st.password}"`;
-    csvContent += row + `\n`;
-  });
-
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.setAttribute('href', url);
-  link.setAttribute('download', `${sectionId}_Template.csv`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  showToast(`Downloaded ${sectionId}_Template.csv template!`, 'success');
+function saveCSV(name, rows) {
+  const text = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\uFEFF' + text], { type: 'text/csv;charset=utf-8;' }));
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
 }
 
-function exportSectionToCSV(sectionId) {
-  const sectionStudents = appState.students.filter(s => s.section === sectionId);
-  if (!sectionStudents.length) {
-    showToast(`No students enrolled in ${sectionId} to export.`, 'error');
-    return;
+// Proper CSV parser (quoted fields, commas and line breaks inside quotes)
+function parseCSV(t) {
+  t = t.replace(/^\uFEFF/, '');
+  const rows = []; let row = [], cur = '', q = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (q) { if (c === '"') { if (t[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+    else if (c === '"') q = true;
+    else if (c === ',') { row.push(cur); cur = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && t[i + 1] === '\n') i++; row.push(cur); cur = ''; rows.push(row); row = []; }
+    else cur += c;
   }
+  if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+  return rows.filter(r => r.some(x => x.trim() !== ''));
+}
 
-  const firstStudent = sectionStudents[0];
-  const sectionSubjects = appState.subjects.filter(s => s.course === firstStudent.course);
+function readCSVFile(event, cb) {
+  const f = event.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = e => { event.target.value = ''; const rows = parseCSV(String(e.target.result)); rows.length < 2 ? showToast('CSV needs a header row and at least one data row.', 'error') : cb(rows); };
+  r.readAsText(f);
+}
 
-  let csvContent = `School ID,Student Name,Course,Section,Student Email,Guardian Name,Guardian Email,Guardian PIN`;
-  sectionSubjects.forEach(sub => {
-    csvContent += `,${sub.code}_Prelim,${sub.code}_Midterm,${sub.code}_PreFinal`;
-  });
-  csvContent += `,Student Password\n`;
+/* ---------- STUDENTS CSV (roster only: no grades) ---------- */
+const ROSTER_HEAD = ['School ID', 'Student Name', 'Course', 'Section', 'Student Email', 'Guardian Name', 'Guardian Email', 'Guardian PIN', 'Student Password'];
 
-  sectionStudents.forEach(st => {
-    let row = `"${st.id}","${st.name}","${st.course}","${st.section}","${st.email}","${st.parent.name}","${st.parent.email}","${st.parent.pin}"`;
-    sectionSubjects.forEach(sub => {
-      const g = (appState.grades[st.id] || {})[sub.id] || { p: '', m: '', pf: '' };
-      row += `,${g.p ?? ''},${g.m ?? ''},${g.pf ?? ''}`;
+function downloadRosterTemplate(sectionId) {
+  const c = sectionCourse(sectionId);
+  saveCSV(`${sectionId}_Students_Template.csv`, [ROSTER_HEAD,
+    ['2026000101', 'Maria Clarissa Santos', c, sectionId, 'maria.santos@student.ua.edu.ph', 'Juan Santos', 'parent.santos@example.com', '123456', '482915'],
+    ['2026000102', 'Juan Miguel Dela Cruz', c, sectionId, 'juan.delacruz@student.ua.edu.ph', 'Maria Dela Cruz', 'parent.delacruz@example.com', '654321', '736204']]);
+  showToast('Students template downloaded.', 'success');
+}
+
+function exportRosterCSV(sectionId) {
+  const list = appState.students.filter(s => s.section === sectionId);
+  if (!list.length) return showToast(`No students enrolled in ${sectionId} to export.`, 'error');
+  saveCSV(`${sectionId}_Students.csv`, [ROSTER_HEAD, ...list.map(s => { const p = s.parent || {}; return [s.id, s.name, s.course, s.section, s.email, p.name, p.email, p.pin, s.password]; })]);
+  showToast(`Exported ${sectionId}_Students.csv`, 'success');
+}
+
+function importRosterCSV(event, sectionId) {
+  readCSVFile(event, rows => {
+    const H = rows[0].map(h => h.trim().toLowerCase());
+    let added = 0, updated = 0;
+    rows.slice(1).forEach(c => {
+      const get = n => { const i = H.indexOf(n); return i < 0 ? '' : (c[i] || '').trim(); };
+      const id = get('school id'), name = get('student name');
+      if (!id || !name) return;
+      const sec = get('section') || sectionId, course = get('course') || sectionCourse(sec);
+      let st = appState.students.find(s => s.id === id);
+      if (!st) {
+        st = { id, name, course, section: sec, email: get('student email'), password: get('student password') || rndCode(),
+          parent: { name: get('guardian name') || 'Guardian', email: get('guardian email'), pin: get('guardian pin') || rndCode() } };
+        appState.students.push(st); added++;
+      } else {
+        const o = st.parent || {};
+        Object.assign(st, { name, course, section: sec, email: get('student email') || st.email });
+        if (get('student password')) st.password = get('student password');
+        st.parent = { name: get('guardian name') || o.name || 'Guardian', email: get('guardian email') || o.email || '', pin: get('guardian pin') || o.pin || rndCode() };
+        updated++;
+      }
+      if (!appState.grades[id]) appState.grades[id] = {};
     });
-    row += `,"${st.password || ''}"`;
-    csvContent += row + `\n`;
+    saveState(); renderApp();
+    showToast(`Students imported: ${added} new, ${updated} updated.`, 'success');
   });
-
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.setAttribute('href', url);
-  link.setAttribute('download', `${sectionId}.csv`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  showToast(`Exported ${sectionId}.csv successfully!`, 'success');
 }
 
-function handleCSVImport(event, sectionId) {
-  const file = event.target.files[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const text = e.target.result;
-    parseAndImportCSV(text, sectionId);
-  };
-  reader.readAsText(file);
+/* ---------- GRADES CSV (Prelim / Midterm / Final = all terms) ---------- */
+function gradeColumns(course, term) {
+  const keys = term === 'pf' ? ['p', 'm', 'pf'] : [term], cols = [];
+  appState.subjects.filter(s => s.course === course).forEach(sub => {
+    keys.forEach(k => cols.push({ sub, k, h: `${sub.code}_${TERM_NAME[k]}` }));
+    if (term === 'pf') { cols.push({ sub, calc: 'pct', h: `${sub.code}_Average` }); cols.push({ sub, calc: 'eq', h: `${sub.code}_Grade` }); }
+  });
+  return cols;
 }
 
-function parseAndImportCSV(csvText, sectionId) {
-  const lines = csvText.split(/\r\n|\n/).filter(line => line.trim() !== '');
-  if (lines.length < 2) {
-    showToast('Invalid CSV format: File must contain a header and student data.', 'error');
-    return;
-  }
+function buildGradesRows(sectionId, term, blank) {
+  const cols = gradeColumns(sectionCourse(sectionId), term);
+  const studs = appState.students.filter(s => s.section === sectionId);
+  const list = blank && !studs.length ? [{ id: '2026000101', name: 'Sample Student' }] : studs;
+  return [['School ID', 'Student Name', ...cols.map(c => c.h)], ...list.map(st => [st.id, st.name, ...cols.map(c => {
+    if (blank) return '';
+    const rec = (appState.grades[st.id] || {})[c.sub.id] || null;
+    if (c.calc) { const cc = calculateSubjectGrade(rec), v = c.calc === 'pct' ? cc.pct : cc.eq; return v == null ? '' : v.toFixed(2); }
+    const v = rec ? rec[c.k] : null;
+    return v == null ? '' : Number(v).toFixed(1);
+  })])];
+}
 
-  const headers = lines[0].split(',').map(h => h.replace(/^"(.*)"$/, '$1').trim());
-  let importedCount = 0;
+function downloadGradesTemplate(sectionId) {
+  const t = uiState.csvTerm || 'p';
+  saveCSV(`${sectionId}_${TERM_FILE[t]}_Grades_Template.csv`, buildGradesRows(sectionId, t, true));
+  showToast(`${TERM_FILE[t]} grades template downloaded.`, 'success');
+}
 
-  for (let i = 1; i < lines.length; i++) {
-    const matches = [...lines[i].matchAll(/(?:^|,)(?:"([^"]*)"|([^,]*))/g)];
-    const cols = matches.map(m => m[1] !== undefined ? m[1] : m[2]);
+function exportGradesCSV(sectionId) {
+  const t = uiState.csvTerm || 'p';
+  if (!appState.students.some(s => s.section === sectionId)) return showToast(`No students enrolled in ${sectionId}.`, 'error');
+  saveCSV(`${sectionId}_${TERM_FILE[t]}_Grades.csv`, buildGradesRows(sectionId, t, false));
+  showToast(`Exported ${TERM_FILE[t]} grades.`, 'success');
+}
 
-    if (cols.length < 5) continue;
-
-    const id = cols[0]?.trim();
-    const name = cols[1]?.trim();
-    const course = cols[2]?.trim();
-    const sec = cols[3]?.trim() || sectionId;
-    const email = cols[4]?.trim();
-    const pName = cols[5]?.trim() || 'Guardian';
-    const pEmail = cols[6]?.trim() || '';
-    const pPin = cols[7]?.trim() || String(100000 + Math.floor(Math.random() * 900000));
-
-    if (!id || !name || !course) continue;
-
-    const pwIdx = headers.indexOf('Student Password');
-    const importedPw = pwIdx !== -1 ? (cols[pwIdx] || '').trim() : '';
-
-    let student = appState.students.find(s => s.id === id);
-    if (!student) {
-      student = { id, name, course, section: sec, email, password: importedPw || String(100000 + Math.floor(Math.random() * 900000)), parent: { name: pName, email: pEmail, pin: pPin } };
-      appState.students.push(student);
-    } else {
-      student.name = name;
-      student.course = course;
-      student.section = sec;
-      student.email = email;
-      if (importedPw) student.password = importedPw;
-      else if (!student.password) student.password = String(100000 + Math.floor(Math.random() * 900000));
-    }
-
-    if (!appState.grades[id]) appState.grades[id] = {};
-
-    const sectionSubjects = appState.subjects.filter(s => s.course === course);
-    sectionSubjects.forEach(sub => {
-      const pIdx = headers.indexOf(`${sub.code}_Prelim`);
-      const mIdx = headers.indexOf(`${sub.code}_Midterm`);
-      const pfIdx = headers.indexOf(`${sub.code}_PreFinal`);
-
-      const pVal = pIdx !== -1 && cols[pIdx] !== '' ? parseFloat(cols[pIdx]) : null;
-      const mVal = mIdx !== -1 && cols[mIdx] !== '' ? parseFloat(cols[mIdx]) : null;
-      const pfVal = pfIdx !== -1 && cols[pfIdx] !== '' ? parseFloat(cols[pfIdx]) : null;
-
-      const rec = appState.grades[id][sub.id] || { p: null, m: null, pf: null };
-      const incoming = { p: isNaN(pVal) ? null : pVal, m: isNaN(mVal) ? null : mVal, pf: isNaN(pfVal) ? null : pfVal };
-      TERMS.forEach(t => {
-        const nv = incoming[t.key];
-        const cur = rec[t.key];
-        if (nv !== null && (cur === null || cur === undefined || Math.abs(cur - nv) > 0.05)) {
-          // A different grade was imported: it replaces any computed components for that term
-          rec[t.key] = nv;
-          if (rec.auto) delete rec.auto[t.key];
-        } else if (nv === null && !(rec.auto && rec.auto[t.key])) {
-          rec[t.key] = null;
-        }
+// Updates only the columns present in the file (e.g. a Prelim file never touches Midterm). Blank cells are skipped.
+function importGradesCSV(event, sectionId) {
+  readCSVFile(event, rows => {
+    const H = rows[0].map(h => h.trim());
+    const idIdx = H.findIndex(h => h.toLowerCase() === 'school id');
+    if (idIdx < 0) return showToast('Missing "School ID" column.', 'error');
+    const map = [];
+    H.forEach((h, i) => { const m = h.match(/^(.+)_(Prelim|Midterm|PreFinal)$/i); if (m) map.push({ i, code: m[1].toUpperCase(), k: { prelim: 'p', midterm: 'm', prefinal: 'pf' }[m[2].toLowerCase()] }); });
+    if (!map.length) return showToast('No grade columns found (expected e.g. IT101_Prelim).', 'error');
+    let upd = 0, skipped = 0, bad = 0;
+    rows.slice(1).forEach(r => {
+      const st = appState.students.find(s => String(s.id) === (r[idIdx] || '').trim());
+      if (!st) { skipped++; return; }
+      let hit = false;
+      map.forEach(m => {
+        const sub = appState.subjects.find(s => s.course === st.course && s.code.toUpperCase() === m.code);
+        const v = (r[m.i] || '').trim();
+        if (!sub || v === '') return;
+        const n = parseFloat(v);
+        if (isNaN(n) || n < 0 || n > 100) { bad++; return; }
+        if (!appState.grades[st.id]) appState.grades[st.id] = {};
+        const rec = appState.grades[st.id][sub.id] || (appState.grades[st.id][sub.id] = { p: null, m: null, pf: null });
+        rec[m.k] = n; if (rec.auto) delete rec.auto[m.k];
+        hit = true;
       });
-      appState.grades[id][sub.id] = rec;
+      if (hit) upd++;
     });
-
-    importedCount++;
-  }
-
-  saveState();
-  renderApp();
-  showToast(`Successfully imported ${importedCount} student records into database!`, 'success');
+    saveState(); renderApp();
+    showToast(`Grades imported for ${upd} student(s)${skipped ? `, ${skipped} unknown ID(s) skipped` : ''}${bad ? `, ${bad} invalid value(s) ignored` : ''}.`, bad ? 'error' : 'success');
+  });
 }
 
 /* ==========================================================================
@@ -626,7 +621,7 @@ function renderLoginPage() {
               <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Password</label>
               <div class="relative">
                 <input type="${uiState.teacherPasswordVisible ? 'text' : 'password'}" id="tLoginPass" required autocomplete="current-password" placeholder="Enter your password" class="w-full px-3.5 py-2.5 pr-10 rounded-xl bg-slate-100 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-sm focus:border-amber-400 focus:outline-none" />
-                <button type="button" onclick="toggleTeacherPassVisibility()" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-amber-500 transition-colors">
+                <button type="button" onclick="togglePass('tLoginPass', this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-amber-500 transition-colors">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     ${uiState.teacherPasswordVisible 
                       ? '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24M1 1l22 22"/>' 
@@ -649,7 +644,7 @@ function renderLoginPage() {
               <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Password</label>
               <div class="relative">
                 <input type="password" id="sLoginPass" required autocomplete="current-password" placeholder="Enter your password" class="w-full px-3.5 py-2.5 pr-10 rounded-xl bg-slate-100 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-sm focus:border-amber-400 focus:outline-none" />
-                <button type="button" onclick="toggleStudentPassVisibility()" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-amber-500 transition-colors">
+                <button type="button" onclick="togglePass('sLoginPass', this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-amber-500 transition-colors">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                 </button>
               </div>
@@ -686,9 +681,16 @@ function switchLoginTab(role) {
   }
 }
 
-function toggleTeacherPassVisibility() {
-  uiState.teacherPasswordVisible = !uiState.teacherPasswordVisible;
-  renderApp();
+const EYE_ON = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>';
+const EYE_OFF = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24M1 1l22 22"/>';
+// Toggles the field in place (no re-render, so typed text is kept)
+function togglePass(id, btn) {
+  const i = document.getElementById(id);
+  if (!i) return;
+  const show = i.type === 'password';
+  i.type = show ? 'text' : 'password';
+  const svg = btn.querySelector('svg');
+  if (svg) svg.innerHTML = show ? EYE_OFF : EYE_ON;
 }
 
 function handleTeacherLogin(e) {
@@ -704,10 +706,6 @@ function handleTeacherLogin(e) {
   }
 }
 
-function toggleStudentPassVisibility() {
-  const input = document.getElementById('sLoginPass');
-  if (input) input.type = input.type === 'password' ? 'text' : 'password';
-}
 
 function handleStudentLogin(e) {
   e.preventDefault();
@@ -1220,7 +1218,7 @@ function renderGradeEntryPage() {
           <input type="date" id="newAttDate" required class="w-full ${field}" />
         </div>
         <button type="submit" class="px-5 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs shadow-md transition-all">+ Add Date</button>
-        <p class="text-[11px] text-slate-500 dark:text-slate-400">P = Present • L = Late (counts as present) • A = Absent • E = Excused (not counted)</p>
+        <p class="text-[11px] text-slate-500 dark:text-slate-400">☑ Checked = Present • Unchecked = Absent • L = Late (counts as present) • E = Excused (not counted). New dates start with everyone present.</p>
       </form>
       ${dates.length === 0 ? emptyBox(`No class dates yet for ${termLabel}. Add a date above, then mark each student.`) : `
         <div id="entryScroll" class="overflow-x-auto">
@@ -1231,7 +1229,7 @@ function renderGradeEntryPage() {
                 ${dates.map(d => `
                   <th class="py-3 px-3 text-center">
                     <div class="normal-case text-slate-600 dark:text-slate-300 font-bold">${fmtDate(d.date)}</div>
-                    <button type="button" onclick="markAllPresent('${d.id}')" class="normal-case text-emerald-600 hover:text-emerald-700 font-bold">All present</button>
+                    <button type="button" onclick="markAllPresent('${d.id}')" class="normal-case mt-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500 hover:text-white font-bold transition-all">✓ All present</button>
                     <span class="opacity-40">•</span>
                     <button type="button" onclick="removeAttendanceDate('${d.id}')" class="normal-case text-rose-500 hover:text-rose-700 font-bold">Remove</button>
                   </th>`).join('')}
@@ -1252,10 +1250,11 @@ function renderGradeEntryPage() {
                     </td>
                     ${dates.map(d => `
                       <td class="py-3 px-3 text-center">
-                        <select id="a_${st.id}_${d.id}" onchange="setAttendance('${st.id}', '${activeSub.id}', '${d.id}', this.value)" class="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 font-mono text-xs font-bold focus:outline-none focus:border-amber-400">
-                          <option value="" ${!att[d.id] ? 'selected' : ''}>-</option>
-                          ${Object.keys(ATT_STATUS).map(k => `<option value="${k}" ${att[d.id] === k ? 'selected' : ''}>${k} - ${ATT_STATUS[k].label}</option>`).join('')}
-                        </select>
+                        <div class="inline-flex items-center gap-1.5">
+                          <input id="a_${st.id}_${d.id}" type="checkbox" ${att[d.id] === 'P' || att[d.id] === 'L' ? 'checked' : ''} onchange="setAttendance('${st.id}', '${activeSub.id}', '${d.id}', this.checked ? 'P' : 'A')" class="w-5 h-5 accent-emerald-600 cursor-pointer" title="Checked = Present, unchecked = Absent" />
+                          <button type="button" title="Late (counts as present)" onclick="setAttendance('${st.id}', '${activeSub.id}', '${d.id}', '${att[d.id] === 'L' ? 'P' : 'L'}')" class="w-5 h-5 rounded text-[10px] font-black ${att[d.id] === 'L' ? 'bg-amber-500 text-slate-950' : 'bg-slate-200 dark:bg-slate-800 text-slate-400'}">L</button>
+                          <button type="button" title="Excused (not counted)" onclick="setAttendance('${st.id}', '${activeSub.id}', '${d.id}', '${att[d.id] === 'E' ? 'A' : 'E'}')" class="w-5 h-5 rounded text-[10px] font-black ${att[d.id] === 'E' ? 'bg-sky-500 text-white' : 'bg-slate-200 dark:bg-slate-800 text-slate-400'}">E</button>
+                        </div>
                       </td>`).join('')}
                     <td class="py-3 px-3 text-center font-mono font-black text-brand-600 dark:text-amber-400">${a.pct !== null ? a.pct.toFixed(1) + '%' : '-'}</td>
                     <td class="py-3 px-3 text-center font-mono text-slate-500">${a.present} / ${a.late} / ${a.absent} / ${a.excused}</td>
@@ -1318,7 +1317,7 @@ function renderGradeEntryPage() {
               `).join('')}
             </div>
             <p class="text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
-              ${termLabel} grade = Quizzes <b>${w.quiz}%</b> + Activities <b>${w.activity}%</b> + Exam <b>${w.exam}%</b> + Attendance <b>${w.attendance}%</b>
+              ${termLabel} grade = Class Standing <b>×${TERM_MULT[term].cs}</b> + Exam <b>×${TERM_MULT[term].ex}</b> <span class="opacity-70">(Class Standing = Quizzes ${w.quiz} : Activities ${w.activity} : Attendance ${w.attendance})</span>
               <span class="opacity-70">(change in Portal Settings)</span>
             </p>
           </div>
@@ -1508,7 +1507,14 @@ function addAttendanceDate(e) {
     showToast('That date is already added.', 'error');
     return;
   }
-  cw.dates.push({ id: newItemId('d'), date });
+  const nd = { id: newItemId('d'), date };
+  cw.dates.push(nd);
+  appState.students.filter(st => st.section === section).forEach(st => {
+    if (!appState.grades[st.id]) appState.grades[st.id] = {};
+    const r = appState.grades[st.id][subjectId] || (appState.grades[st.id][subjectId] = { p: null, m: null, pf: null });
+    if (!r.att) r.att = {};
+    r.att[nd.id] = 'P';
+  });
   cw.dates.sort((a, b) => a.date.localeCompare(b.date));
   syncClass(section, subjectId, term);
   saveState();
@@ -1558,12 +1564,12 @@ function markAllPresent(dateId) {
     if (!appState.grades[st.id]) appState.grades[st.id] = {};
     const rec = appState.grades[st.id][subjectId] || (appState.grades[st.id][subjectId] = { p: null, m: null, pf: null });
     if (!rec.att) rec.att = {};
-    if (!rec.att[dateId]) { rec.att[dateId] = 'P'; n++; }
+    if (rec.att[dateId] !== 'P') { rec.att[dateId] = 'P'; n++; }
   });
   syncClass(section, subjectId, term);
   saveState();
   rerenderKeepPosition();
-  showToast(n ? `Marked ${n} unmarked student(s) present.` : 'Everyone is already marked.', 'success');
+  showToast(n ? `Marked ${n} student(s) present.` : 'Everyone is already present.', 'success');
 }
 
 /* ==========================================================================
@@ -1589,20 +1595,25 @@ function renderStudentsPage() {
             <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Manage student rosters or import/export section CSV databases.</p>
           </div>
 
-          <div class="flex flex-wrap items-center gap-3">
+          <div class="flex flex-col gap-2 w-full md:w-auto md:items-end">
             <select onchange="uiState.studentsSectionFilter = this.value; renderApp();" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200">
               ${appState.sections.map(s => `<option value="${s.id}" ${selectedSection === s.id ? 'selected' : ''}>${s.id} (${s.year || ''})</option>`).join('')}
             </select>
-            <button type="button" onclick="downloadCSVTemplate('${selectedSection}')" class="px-3.5 py-2 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-all">
-              Get Template CSV
-            </button>
-            <button type="button" onclick="exportSectionToCSV('${selectedSection}')" class="px-3.5 py-2 rounded-xl bg-brand-500/10 text-brand-600 dark:text-brand-400 hover:bg-brand-500 hover:text-white text-xs font-bold transition-all">
-              Export Section CSV
-            </button>
-            <label class="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold cursor-pointer shadow-md transition-all">
-              Import CSV Roster
-              <input type="file" accept=".csv" class="hidden" onchange="handleCSVImport(event, '${selectedSection}')" />
-            </label>
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 w-24">Students CSV</span>
+              <button type="button" onclick="downloadRosterTemplate('${selectedSection}')" class="${BTN_GRAY}">Template</button>
+              <button type="button" onclick="exportRosterCSV('${selectedSection}')" class="${BTN_BLUE}">Export</button>
+              <label class="${BTN_GOLD}">Import<input type="file" accept=".csv" class="hidden" onchange="importRosterCSV(event, '${selectedSection}')" /></label>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 w-24">Grades CSV</span>
+              <select onchange="uiState.csvTerm = this.value; renderApp();" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200">
+                ${[['p', 'Prelim'], ['m', 'Midterm'], ['pf', 'Final (all terms)']].map(t => `<option value="${t[0]}" ${(uiState.csvTerm || 'p') === t[0] ? 'selected' : ''}>${t[1]}</option>`).join('')}
+              </select>
+              <button type="button" onclick="downloadGradesTemplate('${selectedSection}')" class="${BTN_GRAY}">Template</button>
+              <button type="button" onclick="exportGradesCSV('${selectedSection}')" class="${BTN_BLUE}">Export</button>
+              <label class="${BTN_GOLD}">Import<input type="file" accept=".csv" class="hidden" onchange="importGradesCSV(event, '${selectedSection}')" /></label>
+            </div>
           </div>
         </div>
       </div>
@@ -2061,9 +2072,9 @@ function renderSettingsPage() {
       <div class="glass-panel p-6 rounded-2xl space-y-4">
         <div>
           <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">Grade Computation Weights</h2>
-          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Term grade = Quizzes + Activities + Exam + Attendance, using these percentages (must total 100%). Saving recomputes all term grades.</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">These set how Quizzes, Activities and Attendance are split inside Class Standing (relative weights). Prelim & Midterm = Class Standing ×2 + Exam ×1; Pre-Final = Class Standing ×1 + Exam ×2. Saving recomputes all term grades.</p>
         </div>
-        <form onsubmit="handleSaveWeights(event)" class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <form onsubmit="handleSaveWeights(event)" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div class="space-y-1">
             <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Quizzes %</label>
             <input type="number" id="wQuiz" min="0" max="100" step="1" required value="${s.weights.quiz}" class="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" />
@@ -2073,14 +2084,10 @@ function renderSettingsPage() {
             <input type="number" id="wActivity" min="0" max="100" step="1" required value="${s.weights.activity}" class="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" />
           </div>
           <div class="space-y-1">
-            <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Exam %</label>
-            <input type="number" id="wExam" min="0" max="100" step="1" required value="${s.weights.exam}" class="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" />
-          </div>
-          <div class="space-y-1">
             <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Attendance %</label>
             <input type="number" id="wAttendance" min="0" max="100" step="1" required value="${s.weights.attendance}" class="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" />
           </div>
-          <div class="col-span-2 sm:col-span-4 flex justify-end">
+          <div class="col-span-1 sm:col-span-3 flex justify-end">
             <button type="submit" class="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-md transition-all">Save Weights</button>
           </div>
         </form>
@@ -2153,16 +2160,15 @@ function handleSaveWeights(e) {
   if (!isTeacherSession()) return;
   const quiz = parseFloat(document.getElementById('wQuiz').value);
   const activity = parseFloat(document.getElementById('wActivity').value);
-  const exam = parseFloat(document.getElementById('wExam').value);
+  const exam = (appState.settings.weights || {}).exam || 0;
   const attendance = parseFloat(document.getElementById('wAttendance').value);
   const all = [quiz, activity, exam, attendance];
   if (all.some(v => isNaN(v) || v < 0)) {
     showToast('Enter valid percentages.', 'error');
     return;
   }
-  const sum = quiz + activity + exam + attendance;
-  if (Math.abs(sum - 100) > 0.001) {
-    showToast(`Weights must total 100% (currently ${sum}%).`, 'error');
+  if (quiz + activity + attendance <= 0) {
+    showToast('Enter at least one weight above 0.', 'error');
     return;
   }
   appState.settings.weights = { quiz, activity, exam, attendance };
@@ -2255,7 +2261,7 @@ function renderStudentDashboard() {
         <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div>
             <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">Class Record</h2>
-            <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Quizzes ${getWeights().quiz}% + Activities ${getWeights().activity}% + Exam ${getWeights().exam}% + Attendance ${getWeights().attendance}% • View only</p>
+            <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Class Standing (quizzes, activities, attendance) ×${TERM_MULT[uiState.studentTerm || 'p'].cs} + Exam ×${TERM_MULT[uiState.studentTerm || 'p'].ex} • View only</p>
           </div>
           <div class="flex rounded-xl bg-slate-200/80 dark:bg-slate-800/80 p-1 border border-slate-300 dark:border-slate-700/60 w-full md:w-auto">
             ${TERMS.map(t => `
@@ -2317,7 +2323,7 @@ function openTranscriptModal(studentId) {
 
   activeTranscriptState = {
     studentId: student.id,
-    recipient: 'guardian',
+    to: '',
     passwordMode: 'pin',
     note: ''
   };
@@ -2325,85 +2331,68 @@ function openTranscriptModal(studentId) {
   renderTranscriptModal();
 }
 
+function transcriptEmail(st) {
+  const T = activeTranscriptState;
+  const pass = T.passwordMode === 'pin' ? st.parent.pin : st.id, label = T.passwordMode === 'pin' ? 'Parent PIN' : 'School ID';
+  return { pass, label, subject: `Official Report of Grades - ${st.name}`,
+    body: `Good day,\n\nAttached is the password-protected report of grades for ${st.name} (${st.section}). To open the PDF document, please use your secure ${label}: ${pass}.\n\n${T.note ? 'Teacher Note: ' + T.note + '\n\n' : ''}*** This is an auto-generated email. DO NOT REPLY TO THIS MESSAGE ***` };
+}
+
+function refreshEmailPreview() {
+  const st = activeTranscriptState && appState.students.find(s => s.id === activeTranscriptState.studentId);
+  if (!st) return;
+  const a = document.getElementById('emailPreviewTo'), b = document.getElementById('emailPreviewBody');
+  if (a) a.textContent = activeTranscriptState.to || '(type the recipient email)';
+  if (b) b.textContent = transcriptEmail(st).body;
+}
+
 function renderTranscriptModal() {
-  const modalRoot = document.getElementById('modalRoot');
-  if (!activeTranscriptState) {
-    modalRoot.innerHTML = '';
-    return;
-  }
-
-  const student = appState.students.find(s => s.id === activeTranscriptState.studentId);
-  if (!student) {
-    modalRoot.innerHTML = '';
-    return;
-  }
-  
-  const sm = getStudentSummary(student);
-
-  const passVal = activeTranscriptState.passwordMode === 'pin' ? student.parent.pin : student.id;
-  const passLabel = activeTranscriptState.passwordMode === 'pin' ? 'Parent PIN' : 'School ID';
-  const targetEmail = activeTranscriptState.recipient === 'student' ? student.email : (activeTranscriptState.recipient === 'guardian' ? student.parent.email : `${student.email}, ${student.parent.email}`);
-
-  // Declare emailSubject and emailBody here BEFORE the template string
-  const emailSubject = `Official Report of Grades - ${student.name}`;
-  const emailBody = `Good day,\n\nAttached is the password-protected report of grades for ${student.name} (${student.section}). To open the PDF document, please use your secure ${passLabel}: ${passVal}.\n\n${activeTranscriptState.note ? 'Teacher Note: ' + activeTranscriptState.note + '\n\n' : ''}*** This is an auto-generated email. DO NOT REPLY TO THIS MESSAGE ***`;
-
-  modalRoot.innerHTML = `
+  const root = document.getElementById('modalRoot');
+  const T = activeTranscriptState;
+  const st = T && appState.students.find(s => s.id === T.studentId);
+  if (!st) { root.innerHTML = ''; return; }
+  const sm = getStudentSummary(st);
+  const on = 'bg-amber-500 text-slate-950 border-amber-500 shadow-md', off = 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300';
+  const inp = 'w-full px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400';
+  root.innerHTML = `
     <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm overflow-y-auto">
       <div class="glass-panel w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         <div class="flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-800">
           <div>
             <h2 class="text-lg font-black text-slate-900 dark:text-white">Official Transcript & Email Dispatch</h2>
-            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">${student.name} (${student.id}) • ${student.section}</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">${st.name} (${st.id}) • ${st.section}</p>
           </div>
-          <button type="button" onclick="closeTranscriptModal()" class="p-2 rounded-xl text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 transition-all">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-          </button>
+          <button type="button" onclick="closeTranscriptModal()" class="p-2 rounded-xl text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 transition-all">✕</button>
         </div>
-
         <div class="p-6 overflow-y-auto space-y-6 flex-1">
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div class="space-y-4">
-              <div class="space-y-2">
-                <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Recipient</label>
-                <div class="grid grid-cols-3 gap-2">
-                  <button type="button" onclick="activeTranscriptState.recipient='student'; renderTranscriptModal();" class="py-2.5 rounded-xl font-bold text-xs border transition-all ${activeTranscriptState.recipient === 'student' ? 'bg-brand-500 text-white border-brand-500 shadow-md' : 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'}">Student</button>
-                  <button type="button" onclick="activeTranscriptState.recipient='guardian'; renderTranscriptModal();" class="py-2.5 rounded-xl font-bold text-xs border transition-all ${activeTranscriptState.recipient === 'guardian' ? 'bg-brand-500 text-white border-brand-500 shadow-md' : 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'}">Guardian</button>
-                  <button type="button" onclick="activeTranscriptState.recipient='both'; renderTranscriptModal();" class="py-2.5 rounded-xl font-bold text-xs border transition-all ${activeTranscriptState.recipient === 'both' ? 'bg-brand-500 text-white border-brand-500 shadow-md' : 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'}">Both</button>
-                </div>
+              <div class="space-y-1">
+                <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Send to (your own email entry)</label>
+                <input type="email" id="modalTo" value="${(T.to || '').replace(/"/g, '&quot;')}" oninput="activeTranscriptState.to = this.value.trim(); refreshEmailPreview()" placeholder="type recipient email, e.g. parent@gmail.com" class="${inp}" />
               </div>
-
               <div class="space-y-2">
                 <label class="text-xs font-bold text-slate-700 dark:text-slate-300">PDF Password Protection</label>
                 <div class="grid grid-cols-2 gap-2">
-                  <button type="button" onclick="activeTranscriptState.passwordMode='pin'; renderTranscriptModal();" class="py-2.5 rounded-xl font-bold text-xs border transition-all ${activeTranscriptState.passwordMode === 'pin' ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-md' : 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'}">Parent PIN (${student.parent.pin})</button>
-                  <button type="button" onclick="activeTranscriptState.passwordMode='id'; renderTranscriptModal();" class="py-2.5 rounded-xl font-bold text-xs border transition-all ${activeTranscriptState.passwordMode === 'id' ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-md' : 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'}">School ID (${student.id})</button>
+                  <button type="button" onclick="activeTranscriptState.passwordMode='pin'; renderTranscriptModal();" class="py-2.5 rounded-xl font-bold text-xs border transition-all ${T.passwordMode === 'pin' ? on : off}">Parent PIN (${st.parent.pin})</button>
+                  <button type="button" onclick="activeTranscriptState.passwordMode='id'; renderTranscriptModal();" class="py-2.5 rounded-xl font-bold text-xs border transition-all ${T.passwordMode === 'id' ? on : off}">School ID (${st.id})</button>
                 </div>
               </div>
-
               <div class="space-y-1">
                 <label class="text-xs font-bold text-slate-700 dark:text-slate-300">Additional Message / Note</label>
-                <textarea id="modalNote" oninput="activeTranscriptState.note = this.value" placeholder="Optional notes from teacher..." class="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400" rows="3">${activeTranscriptState.note}</textarea>
+                <textarea id="modalNote" oninput="activeTranscriptState.note = this.value; refreshEmailPreview()" placeholder="Optional notes from teacher..." class="${inp}" rows="3">${T.note}</textarea>
               </div>
             </div>
-
             <div class="bg-slate-900 text-slate-100 p-5 rounded-2xl space-y-3 font-mono text-xs flex flex-col justify-between border border-slate-800">
               <div class="space-y-2">
-                <div class="flex items-center justify-between text-[10px] text-amber-400 font-bold uppercase tracking-wider">
-                  <span>Simulated Email Dispatch</span>
-                  <span>SMTP Secure</span>
-                </div>
-                <div class="text-slate-400">Sender: <span class="text-white">universityoftheassumptiongrades@ua.edu.ph</span></div>
-                <div class="text-slate-400">To: <span class="text-white">${targetEmail}</span></div>
-                <div class="text-slate-400 pt-1 border-t border-slate-800">Subject: ${emailSubject}</div>
-                <div class="bg-slate-950 p-3 rounded-xl text-slate-300 whitespace-pre-line mt-2 text-[11px] leading-relaxed border border-slate-800/80">${emailBody}</div>
+                <div class="text-[10px] text-amber-400 font-bold uppercase tracking-wider">Email Preview</div>
+                <div class="text-slate-400">To: <span id="emailPreviewTo" class="text-white"></span></div>
+                <div class="text-slate-400 pt-1 border-t border-slate-800">Subject: Official Report of Grades - ${st.name}</div>
+                <div id="emailPreviewBody" class="bg-slate-950 p-3 rounded-xl text-slate-300 whitespace-pre-line mt-2 text-[11px] leading-relaxed border border-slate-800/80"></div>
               </div>
-              <button type="button" onclick="copyEmailDraftText('${targetEmail.replace(/'/g, "\\'")}', '${emailBody.replace(/'/g, "\\'").replace(/\n/g, '\\n')}')" class="w-full py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all">
-                Copy Email Draft & Message
-              </button>
+              <button type="button" onclick="copyEmailDraftText()" class="w-full py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all">Copy Email Draft</button>
             </div>
           </div>
-
           <div class="bg-slate-50 dark:bg-slate-900/60 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3 text-xs">
             <h3 class="font-bold text-slate-800 dark:text-slate-100">Transcript Summary Preview</h3>
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 font-mono">
@@ -2414,19 +2403,14 @@ function renderTranscriptModal() {
             </div>
           </div>
         </div>
-
-           <div class="flex items-center justify-end gap-3 p-6 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40">
-              <button type="button" onclick="closeTranscriptModal()" class="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs">Cancel</button>
-              <button type="button" onclick="dispatchTranscriptAndPDF()" class="px-4 py-2.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs transition-all">
-                📥 Download PDF
-           </button>
-              <a href="https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(targetEmail)}&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}" target="_blank" rel="noopener noreferrer" onclick="dispatchTranscriptAndPDF()" class="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2">
-                <span>✉️ Download PDF & Open Gmail</span>
-              </a>
-         </div>
+        <div class="flex flex-wrap items-center justify-end gap-3 p-6 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40">
+          <button type="button" onclick="closeTranscriptModal()" class="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs">Cancel</button>
+          <button type="button" onclick="dispatchTranscriptAndPDF(false)" class="px-4 py-2.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs transition-all">📥 Download PDF</button>
+          <button type="button" onclick="dispatchTranscriptAndPDF(true)" class="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition-all">✉️ Download PDF & Open Gmail</button>
+        </div>
       </div>
-    </div>
-  `;
+    </div>`;
+  refreshEmailPreview();
 }
 
 function closeTranscriptModal() {
@@ -2434,117 +2418,101 @@ function closeTranscriptModal() {
   renderTranscriptModal();
 }
 
-function copyEmailDraftText(to, body) {
-  const fullText = `To: ${to}\nSender: universityoftheassumptiongrades@ua.edu.ph\n\n${body}`;
-  navigator.clipboard.writeText(fullText).then(() => {
-    showToast('Email draft and message copied to clipboard!', 'success');
-  });
+function copyEmailDraftText() {
+  const T = activeTranscriptState, st = appState.students.find(s => s.id === T.studentId), em = transcriptEmail(st);
+  navigator.clipboard.writeText(`To: ${T.to}\nSubject: ${em.subject}\n\n${em.body}`).then(() => showToast('Email draft copied!', 'success'));
 }
 
-function dispatchTranscriptAndPDF() {
-  const st = appState.students.find(s => s.id === activeTranscriptState.studentId);
-  const sm = getStudentSummary(st);
-  const password = activeTranscriptState.passwordMode === 'pin' ? st.parent.pin : st.id;
-  const passLabel = activeTranscriptState.passwordMode === 'pin' ? 'Parent PIN' : 'School ID';
+function dispatchTranscriptAndPDF(openMail) {
+  const T = activeTranscriptState;
+  if (!T) return;
+  const st = appState.students.find(s => s.id === T.studentId);
+  if (!st) return;
+  const to = (T.to || '').trim();
+  if (openMail && !/^\S+@\S+\.\S+$/.test(to)) return showToast('Type a valid recipient email first.', 'error');
+  if (!window.jspdf) return showToast('jsPDF library failed to load. Check internet connection.', 'error');
 
-  if (!window.jspdf) {
-    showToast('jsPDF library failed to load. Check internet connection.', 'error');
-    return;
+  const sm = getStudentSummary(st), em = transcriptEmail(st), S = appState.settings;
+  const doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4', encryption: { userPassword: em.pass, ownerPassword: 'ua_admin_secure_key_2026', userPermissions: ['print'] } });
+  const BLUE = [0, 43, 102], GOLD = [245, 166, 35], GRAY = [100, 116, 139], INK = [30, 41, 59];
+  const g = v => (v === null || v === undefined || v === '' || isNaN(Number(v))) ? '-' : Number(v).toFixed(1);
+
+  // Header band
+  doc.setFillColor(...BLUE); doc.rect(0, 0, 210, 30, 'F');
+  doc.setFillColor(...GOLD); doc.rect(0, 30, 210, 1.5, 'F');
+  doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(16);
+  doc.text(S.school, 105, 13, { align: 'center' });
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+  doc.text('OFFICIAL REPORT OF GRADES', 105, 20, { align: 'center' });
+  doc.text(S.term, 105, 25.5, { align: 'center' });
+
+  // Student info card
+  doc.setDrawColor(203, 213, 225); doc.setFillColor(248, 250, 252); doc.roundedRect(14, 37, 182, 22, 2, 2, 'FD');
+  const kv = (l, v, x, y) => { doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(...GRAY); doc.text(l, x, y); doc.setFont('helvetica', 'normal'); doc.setTextColor(...INK); doc.text(String(v), x + 30, y); };
+  kv('Student Name', st.name, 18, 44); kv('School ID', st.id, 18, 50); kv('Course', st.course, 18, 56);
+  kv('Section', st.section, 112, 44); kv('Date Issued', new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' }), 112, 50); kv('Units Credited', `${sm.unitsEvaluated} / ${sm.totalUnits}`, 112, 56);
+
+  // Grades table
+  const cols = [['CODE', 16, 'left'], ['SUBJECT TITLE', 36, 'left'], ['UNITS', 99, 'center'], ['PRELIM', 113, 'center'], ['MIDTERM', 129, 'center'], ['PRE-FINAL', 146, 'center'], ['AVG %', 162, 'center'], ['GRADE', 176, 'center'], ['STATUS', 188, 'center']];
+  const head = y => {
+    doc.setFillColor(...BLUE); doc.rect(14, y, 182, 8, 'F');
+    doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
+    cols.forEach(c => doc.text(c[0], c[1], y + 5.3, { align: c[2] }));
+  };
+  let y = 65; head(y); y += 8;
+  sm.rows.forEach((r, i) => {
+    if (y > 262) { doc.addPage(); y = 20; head(y); y += 8; }
+    if (i % 2 === 0) { doc.setFillColor(241, 245, 249); doc.rect(14, y, 182, 7.5, 'F'); }
+    const gr = r.g || {}, st2 = r.calc.status, ty = y + 5;
+    doc.setFontSize(8.5); doc.setTextColor(...INK);
+    doc.setFont('helvetica', 'bold'); doc.text(r.sub.code, 16, ty);
+    doc.setFont('helvetica', 'normal'); doc.text(doc.splitTextToSize(r.sub.title, 56)[0], 36, ty);
+    [[String(r.sub.units), 99], [g(gr.p), 113], [g(gr.m), 129], [g(gr.pf), 146], [r.calc.pct !== null ? r.calc.pct.toFixed(1) : '-', 162]].forEach(v => doc.text(v[0], v[1], ty, { align: 'center' }));
+    doc.setFont('helvetica', 'bold'); doc.text(formatGradeEq(r.calc.eq), 176, ty, { align: 'center' });
+    doc.setTextColor(...(st2 === 'passed' ? [5, 150, 105] : st2 === 'failed' ? [225, 29, 72] : [217, 119, 6]));
+    doc.setFontSize(7.5); doc.text(st2 === 'passed' ? 'PASSED' : st2 === 'failed' ? 'FAILED' : 'INC', 188, ty, { align: 'center' });
+    y += 7.5;
+  });
+  doc.setDrawColor(...BLUE); doc.setLineWidth(0.4); doc.line(14, y, 196, y);
+
+  // Summary card
+  if (y > 225) { doc.addPage(); y = 20; }
+  y += 8;
+  doc.setFillColor(238, 242, 255); doc.setDrawColor(203, 213, 225); doc.roundedRect(14, y, 182, 24, 2, 2, 'FD');
+  doc.setTextColor(...GRAY); doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.text('GENERAL WEIGHTED AVERAGE', 20, y + 7);
+  doc.setTextColor(...BLUE); doc.setFontSize(20); doc.text(formatGwa(sm.gwa), 20, y + 18);
+  doc.setFontSize(9); doc.setTextColor(...INK);
+  doc.text(`Standing: ${sm.standing.label}`, 80, y + 9);
+  doc.setFont('helvetica', 'normal'); doc.text(`Passed: ${sm.passedCount}   Failed: ${sm.failedCount}   Incomplete: ${sm.incCount}   Total subjects: ${sm.rows.length}`, 80, y + 16);
+  y += 31;
+
+  if (T.note) {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...INK); doc.text('Teacher Note:', 14, y);
+    doc.setFont('helvetica', 'normal'); const lines = doc.splitTextToSize(T.note, 180); doc.text(lines, 14, y + 5); y += 5 + lines.length * 4.5 + 4;
   }
+  if (y > 245) { doc.addPage(); y = 20; }
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...GRAY);
+  doc.text(doc.splitTextToSize('Grading scale: 97-100 = 1.00 | 94-96 = 1.25 | 91-93 = 1.50 | 88-90 = 1.75 | 85-87 = 2.00 | 82-84 = 2.25 | 79-81 = 2.50 | 76-78 = 2.75 | 75 = 3.00 (lowest passing) | below 75 = 5.00 (failed). Term grades: Prelim & Midterm = Class Standing x2 + Exam x1; Pre-Final = Class Standing x1 + Exam x2.', 182), 14, y);
+  y += 22;
+  doc.setDrawColor(...INK); doc.setLineWidth(0.3); doc.line(130, y, 192, y);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...INK); doc.text(S.registrar, 161, y + 5, { align: 'center' });
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...GRAY); doc.text('Registrar / Professor', 161, y + 9.5, { align: 'center' });
 
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({
-    unit: 'mm',
-    format: 'a4',
-    encryption: {
-      userPassword: password,
-      ownerPassword: 'ua_admin_secure_key_2026',
-      userPermissions: ['print']
-    }
-  });
-
-  const S = appState.settings;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14);
-  doc.text(S.school, 105, 15, { align: 'center' });
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Official Report of Grades • ${S.term}`, 105, 21, { align: 'center' });
-
-  doc.setFontSize(9);
-  doc.text(`Student Name: ${st.name}`, 14, 32);
-  doc.text(`School ID: ${st.id}`, 14, 38);
-  doc.text(`Course & Section: ${st.course} - ${st.section}`, 120, 32);
-  doc.text(`Date Issued: ${new Date().toLocaleDateString()}`, 120, 38);
-
-  let y = 48;
-  doc.setFont('helvetica', 'bold');
-  doc.text('Code', 14, y);
-  doc.text('Subject Title', 36, y);
-  doc.text('Units', 120, y, { align: 'center' });
-  doc.text('Grade', 150, y, { align: 'center' });
-  doc.text('Status', 185, y, { align: 'center' });
-
-  doc.setLineWidth(0.3);
-  doc.line(14, y + 2, 196, y + 2);
-  y += 8;
-
-  doc.setFont('helvetica', 'normal');
-  sm.rows.forEach(r => {
-    if (y > 270) {
-      doc.addPage();
-      y = 20;
-    }
-    doc.text(r.sub.code, 14, y);
-    doc.text(r.sub.title.substring(0, 42), 36, y);
-    doc.text(String(r.sub.units), 120, y, { align: 'center' });
-    doc.text(formatGradeEq(r.calc.eq), 150, y, { align: 'center' });
-    doc.text(r.calc.status.toUpperCase(), 185, y, { align: 'center' });
-    y += 7;
-  });
-
-  y += 6;
-  doc.line(14, y, 196, y);
-  y += 8;
-  doc.setFont('helvetica', 'bold');
-  doc.text(`General Weighted Average (GWA): ${formatGwa(sm.gwa)}`, 14, y);
-  doc.text(`Standing: ${sm.standing.label}`, 14, y + 6);
-
-  if (activeTranscriptState.note) {
-    y += 16;
-    doc.setFont('helvetica', 'bold');
-    doc.text('Teacher Note:', 14, y);
-    doc.setFont('helvetica', 'normal');
-    doc.text(activeTranscriptState.note, 14, y + 6);
+  // Footer on every page
+  const n = doc.getNumberOfPages();
+  for (let p = 1; p <= n; p++) {
+    doc.setPage(p); doc.setDrawColor(203, 213, 225); doc.setLineWidth(0.2); doc.line(14, 285, 196, 285);
+    doc.setFontSize(7); doc.setTextColor(...GRAY);
+    doc.text(`${S.school} • ${st.name} (${st.id}) • Confidential`, 14, 290);
+    doc.text(`Page ${p} of ${n}`, 196, 290, { align: 'right' });
   }
 
   const filename = `UA_Grades_${st.id}_${st.section}.pdf`;
   doc.save(filename);
-
-  appState.log.unshift({
-    when: new Date().toLocaleString(),
-    sid: st.id,
-    name: st.name,
-    to: activeTranscriptState.recipient,
-    pwLabel,
-    file: filename
-  });
+  appState.log.unshift({ when: new Date().toLocaleString(), sid: st.id, name: st.name, to: to || '(download only)', pwLabel: em.label, file: filename });
   saveState();
-  renderApp();
-  showToast('PDF Transcript downloaded successfully!', 'success');
-}
-
-function openGmailWebDraft() {
-  const st = appState.students.find(s => s.id === activeTranscriptState.studentId);
-  const password = activeTranscriptState.passwordMode === 'pin' ? st.parent.pin : st.id;
-  const passLabel = activeTranscriptState.passwordMode === 'pin' ? 'Parent PIN' : 'School ID';
-  const targetEmail = activeTranscriptState.recipient === 'student' ? st.email : (activeTranscriptState.recipient === 'guardian' ? st.parent.email : st.parent.email);
-  
-  const emailSubject = `Official Report of Grades - ${st.name}`;
-  const emailBody = `Good day,\n\nAttached is the password-protected report of grades for ${st.name} (${st.section}). To open the PDF document, please use your secure ${passLabel}: ${password}.\n\n${activeTranscriptState.note ? 'Teacher Note: ' + activeTranscriptState.note + '\n\n' : ''}*** This is an auto-generated email. DO NOT REPLY TO THIS MESSAGE ***`;
-
-  const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(targetEmail)}&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
-  window.open(gmailUrl, '_blank');
+  if (openMail) window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${encodeURIComponent(em.subject)}&body=${encodeURIComponent(em.body)}`, '_blank');
+  showToast(openMail ? 'PDF downloaded. Attach it in the Gmail window.' : 'PDF downloaded successfully!', 'success');
 }
 
 /* ==========================================================================
@@ -2872,5 +2840,7 @@ document.addEventListener('keydown', e => {
 });
 
 document.addEventListener('DOMContentLoaded', () => {
+  recomputeAllTermGrades();   // apply the x2 / x1 formula to existing records
+  saveState();
   renderApp();
 });
