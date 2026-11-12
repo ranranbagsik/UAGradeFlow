@@ -948,32 +948,30 @@ function handleStudentLogin(e) {
   const number = document.getElementById('sLoginNumber').value.trim();
   const pass = document.getElementById('sLoginPass').value.trim();
 
-  console.log("Attempting login for ID:", number);
+  console.log("Attempting login for ID:", number, "Pass:", pass);
+
   let studentObj = null;
-
-  if (window.appState?.students) {
-    // Check if stored as dictionary (e.g. appState.students[number])
-    const record = window.appState.students[number];
-    if (record) {
-      studentObj = record.data || record;
-    } else {
-      // Search through entries or array
-      const studentsList = Array.isArray(window.appState.students) 
-        ? window.appState.students 
-        : Object.values(window.appState.students);
-
-      const found = studentsList.find(s => {
-        const sId = String(s.id || s.data?.id || s.data?.studentNumber || '').trim();
+  if (appState?.students) {
+    // 1. Direct dictionary key check
+    if (appState.students[number]) {
+      const raw = appState.students[number];
+      studentObj = raw.data || raw;
+    } 
+    // 2. Fallback to array or object values search
+    else {
+      const list = Array.isArray(appState.students) ? appState.students : Object.values(appState.students);
+      const found = list.find(s => {
+        const sObj = s.data || s;
+        const sId = String(sObj.id || sObj.studentNumber || s.id || '').trim();
         return sId === number;
       });
-
       if (found) {
         studentObj = found.data || found;
       }
     }
   }
 
-  console.log("Resolved student object:", studentObj);
+  console.log("Resolved student object for login:", studentObj);
   const storedPassword = String(studentObj?.password || studentObj?.pass || '').trim();
 
   if (studentObj && storedPassword === pass) {
