@@ -1,3 +1,8 @@
+// Initialize Supabase client
+const SUPABASE_URL = 'https://cndqeuebqtfbuebrgcxy.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable__PCVowMDvTwJUmfMcctm6w_P-DMOG25';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
 /* ==========================================================================
    1. DATA MODELS & LOCAL STORAGE MANAGEMENT
    ========================================================================== */
@@ -24,6 +29,81 @@ const DEFAULT_MINORS = [
   ['PE101', 'Physical Education 1', 2],
   ['NSTP1', 'National Service Training Program 1', 3]
 ];
+
+// ==========================================
+// SUPABASE SYNC HELPERS
+// ==========================================
+
+// Save a specific table's item or entire state
+async function syncTableToSupabase(tableName, recordId, dataObject) {
+    try {
+        const { error } = await supabase
+            .from(tableName)
+            .upsert({ id: recordId, data: dataObject, updated_at: new Date() });
+        if (error) console.error(`Error syncing ${tableName}:`, error);
+    } catch (err) {
+        console.error(`Exception syncing ${tableName}:`, err);
+    }
+}
+
+// Load an entire table into an object or array format
+async function loadTableFromSupabase(tableName) {
+    try {
+        const { data, error } = await supabase.from(tableName).select('*');
+        if (error) {
+            console.error(`Error loading ${tableName}:`, error);
+            return null;
+        }
+        // Convert rows back to your app's expected structure
+        let result = tableName === 'log' ? [] : {};
+        data.forEach(row => {
+            if (tableName === 'log') {
+                result.push(row.data);
+            } else {
+                result[row.id] = row.data;
+            }
+        });
+        return result.length > 0 || Object.keys(result).length > 0 ? result : null;
+    } catch (err) {
+        console.error(`Exception loading ${tableName}:`, err);
+        return null;
+    }
+}
+
+// ==========================================
+// APPSTATE SUPABASE INTEGRATION
+// ==========================================
+
+// Load entire appState from Supabase tables
+async function loadAppStateFromSupabase() {
+    try {
+        console.log("Loading appState from Supabase...");
+        const loadedSettings = await loadTableFromSupabase('settings');
+        const loadedSubjects = await loadTableFromSupabase('subjects');
+        const loadedCourses = await loadTableFromSupabase('courses');
+        const loadedSections = await loadTableFromSupabase('sections');
+        const loadedClasswork = await loadTableFromSupabase('classwork');
+        const loadedTeachers = await loadTableFromSupabase('teachers');
+        const loadedStudents = await loadTableFromSupabase('students');
+        const loadedGrades = await loadTableFromSupabase('grades');
+        const loadedLog = await loadTableFromSupabase('log');
+
+        // Update appState if data exists in Supabase
+        if (loadedSettings && loadedSettings[1]) window.appState.settings = loadedSettings[1];
+        if (loadedSubjects) window.appState.subjects = loadedSubjects;
+        if (loadedCourses) window.appState.courses = loadedCourses;
+        if (loadedSections) window.appState.sections = loadedSections;
+        if (loadedClasswork) window.appState.classwork = loadedClasswork;
+        if (loadedTeachers) window.appState.teachers = loadedTeachers;
+        if (loadedStudents) window.appState.students = loadedStudents;
+        if (loadedGrades) window.appState.grades = loadedGrades;
+        if (loadedLog) window.appState.log = loadedLog;
+
+        console.log("appState successfully loaded from Supabase!", window.appState);
+    } catch (err) {
+        console.error("Error loading appState from Supabase:", err);
+    }
+}
 
 function generateSubjectsSeed() {
   const subjects = [];
