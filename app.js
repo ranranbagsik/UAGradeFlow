@@ -66,6 +66,7 @@ function generateCleanStateData() {
       school: 'University of the Assumption',
       registrar: 'Prof. Mark Anthony Madalipay',
       term: '1st Semester, A.Y. 2026-2027',
+      releasedTerm: 'p',
       weights: { quiz: 30, activity: 30, exam: 30, attendance: 10 }
     },
     subjects: generateSubjectsSeed(),
@@ -93,6 +94,7 @@ function loadState() {
         if (!parsed.courses) parsed.courses = [...COURSES];
         if (!parsed.sections) parsed.sections = [...SECTIONS];
         if (!parsed.settings) parsed.settings = generateCleanStateData().settings;
+        if (!parsed.settings.releasedTerm) parsed.settings.releasedTerm = 'p';
         if (!parsed.settings.weights || parsed.settings.weights.exam === undefined) {
           parsed.settings.weights = { quiz: 30, activity: 30, exam: 30, attendance: 10 };
         }
@@ -167,6 +169,18 @@ const TERMS = [
 ];
 // Prelim & Midterm: Class Standing x2, Exam x1.  Pre-Final: Class Standing x1, Exam x2.
 const TERM_MULT = { p: { cs: 2, ex: 1 }, m: { cs: 2, ex: 1 }, pf: { cs: 1, ex: 2 } };
+
+/* ---------- Student grade release (controlled by teacher in Portal Settings) ---------- */
+function releasedTerm() {
+  return (appState.settings && appState.settings.releasedTerm) || 'p';
+}
+function finalsReleased() { return releasedTerm() === 'pf'; }
+// Prelim -> only Prelim, Midterm -> only Midterm, Pre-Final -> all three
+function visibleTerms() {
+  const r = releasedTerm();
+  return r === 'pf' ? ['p', 'm', 'pf'] : [r];
+}
+
 const ATT_STATUS = {
   P: { label: 'Present', tone: 'pass' },
   L: { label: 'Late', tone: 'warn' },
@@ -2069,6 +2083,17 @@ function renderSettingsPage() {
         </form>
       </div>
 
+      <div class="glass-panel p-6 rounded-2xl space-y-3">
+        <div>
+          <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">Student Grade Release</h2>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Prelim shows only Prelim grades, Midterm shows only Midterm grades, and Pre-Final shows all grades with GWA, standing and the PDF transcript.</p>
+        </div>
+        <select onchange="handleReleasedTerm(this.value)" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200">
+          ${[['p', 'Prelim period'], ['m', 'Midterm period'], ['pf', 'Finals (show all grades)']].map(o =>
+            `<option value="${o[0]}" ${releasedTerm() === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}
+        </select>
+      </div>
+
       <div class="glass-panel p-6 rounded-2xl space-y-4">
         <div>
           <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">Grade Computation Weights</h2>
@@ -2129,6 +2154,14 @@ function renderSettingsPage() {
       </div>
     </div>
   `;
+}
+
+function handleReleasedTerm(val) {
+  if (!isTeacherSession()) return;
+  appState.settings.releasedTerm = val;
+  saveState();
+  renderApp();
+  showToast('Student view updated.', 'success');
 }
 
 function handleAddTeacher(e) {
@@ -2198,6 +2231,11 @@ function renderStudentDashboard() {
   const student = appState.students.find(s => s.id === authUser.studentId);
   if (!student) return `<div class="p-8 text-center text-xs text-slate-500">Student account not found in database.</div>`;
 
+  // Released-term gating: Prelim/Midterm show only that term; Finals show everything
+  const fin = finalsReleased();
+  if (!visibleTerms().includes(uiState.studentTerm)) uiState.studentTerm = releasedTerm();
+  const lockTxt = '<div class="text-sm font-bold text-slate-400 mt-2">Available after Finals</div>';
+
   const sm = getStudentSummary(student);
   const classData = getStudentClassData(student);
 
@@ -2214,44 +2252,40 @@ function renderStudentDashboard() {
           </div>
         </div>
 
-        <button type="button" onclick="openTranscriptModal('${student.id}')" class="px-5 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2">
+        ${fin ? `<button type="button" onclick="openTranscriptModal('${student.id}')" class="px-5 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
           <span>Download PDF Transcript</span>
-        </button>
+        </button>` : `<span class="text-xs font-bold text-slate-400">PDF transcript available after Finals</span>`}
       </div>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div class="glass-panel p-5 rounded-2xl">
           <span class="text-xs font-bold text-slate-500 uppercase">General Weighted Average</span>
-          <div class="text-3xl font-black text-brand-600 dark:text-amber-400 mt-2 font-mono">${formatGwa(sm.gwa)}</div>
-          <p class="text-xs text-slate-400 mt-1">1.00 Highest • 3.00 Passing</p>
+          ${fin ? `<div class="text-3xl font-black text-brand-600 dark:text-amber-400 mt-2 font-mono">${formatGwa(sm.gwa)}</div>
+          <p class="text-xs text-slate-400 mt-1">1.00 Highest • 3.00 Passing</p>` : lockTxt}
         </div>
 
         <div class="glass-panel p-5 rounded-2xl">
           <span class="text-xs font-bold text-slate-500 uppercase">Academic Standing</span>
-          <div class="mt-2">
-            <span class="px-3 py-1 rounded-full text-xs font-bold bg-${sm.standing.color}-500/10 text-${sm.standing.color}-600 dark:text-${sm.standing.color}-400">
-              ${sm.standing.label}
-            </span>
-          </div>
-          <p class="text-xs text-slate-400 mt-2">Current term evaluation</p>
+          ${fin ? `<div class="mt-2"><span class="px-3 py-1 rounded-full text-xs font-bold bg-${sm.standing.color}-500/10 text-${sm.standing.color}-600 dark:text-${sm.standing.color}-400">${sm.standing.label}</span></div>
+          <p class="text-xs text-slate-400 mt-2">Current term evaluation</p>` : lockTxt}
         </div>
 
         <div class="glass-panel p-5 rounded-2xl">
           <span class="text-xs font-bold text-slate-500 uppercase">Subjects Passed</span>
-          <div class="text-3xl font-black text-slate-900 dark:text-white mt-2 font-mono">${sm.passedCount} / ${sm.rows.length}</div>
-          <p class="text-xs text-slate-400 mt-1">${sm.failedCount} failed, ${sm.incCount} incomplete</p>
+          ${fin ? `<div class="text-3xl font-black text-slate-900 dark:text-white mt-2 font-mono">${sm.passedCount} / ${sm.rows.length}</div>
+          <p class="text-xs text-slate-400 mt-1">${sm.failedCount} failed, ${sm.incCount} incomplete</p>` : lockTxt}
         </div>
 
         <div class="glass-panel p-5 rounded-2xl">
           <span class="text-xs font-bold text-slate-500 uppercase">Credited Units</span>
-          <div class="text-3xl font-black text-slate-900 dark:text-white mt-2 font-mono">${sm.unitsEvaluated} / ${sm.totalUnits}</div>
-          <p class="text-xs text-slate-400 mt-1">Successfully earned units</p>
+          ${fin ? `<div class="text-3xl font-black text-slate-900 dark:text-white mt-2 font-mono">${sm.unitsEvaluated} / ${sm.totalUnits}</div>
+          <p class="text-xs text-slate-400 mt-1">Successfully earned units</p>` : lockTxt}
         </div>
       </div>
 
       <div class="glass-panel p-6 rounded-2xl space-y-4">
-        <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">Official 3–Term Grade Breakdown</h2>
+        <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">${fin ? 'Official 3–Term Grade Breakdown' : (TERMS.find(t => t.key === releasedTerm()).label + ' Grades')}</h2>
         <div id="gradeCanvasWrap" class="overflow-x-auto protected-grades" oncontextmenu="return false" ondragstart="return false">
           <canvas id="gradeCanvas" role="img" aria-label="Official grade breakdown (image)" oncontextmenu="return false"></canvas>
         </div>
@@ -2264,7 +2298,7 @@ function renderStudentDashboard() {
             <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Class Standing (quizzes, activities, attendance) ×${TERM_MULT[uiState.studentTerm || 'p'].cs} + Exam ×${TERM_MULT[uiState.studentTerm || 'p'].ex} • View only</p>
           </div>
           <div class="flex rounded-xl bg-slate-200/80 dark:bg-slate-800/80 p-1 border border-slate-300 dark:border-slate-700/60 w-full md:w-auto">
-            ${TERMS.map(t => `
+            ${TERMS.filter(t => visibleTerms().includes(t.key)).map(t => `
               <button type="button" onclick="setStudentTerm('${t.key}')" class="flex-1 md:flex-none px-5 py-2 text-xs font-bold rounded-lg transition-all ${uiState.studentTerm === t.key ? 'bg-brand-500 text-white shadow-md' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}">${t.label}</button>
             `).join('')}
           </div>
@@ -2312,6 +2346,12 @@ function renderStudentDashboard() {
 let activeTranscriptState = null;
 
 function openTranscriptModal(studentId) {
+  // Students can only open their transcript once Finals are released
+  if (authUser && authUser.role === 'student' && !finalsReleased()) {
+    showToast('Your transcript is available after Finals are released.', 'error');
+    return;
+  }
+
   console.log("Opening transcript modal for student ID:", studentId);
   const student = appState.students.find(s => String(s.id) === String(studentId));
   
@@ -2541,16 +2581,20 @@ function drawGradeCanvas() {
     otherBg: 'rgba(245,158,11,0.15)', otherFg: '#d97706'
   };
 
+  // Only the released term(s) are shown; average/grade/status appear after Finals
+  const vis = visibleTerms(), fin = finalsReleased();
   const cols = [
     { key: 'code', w: 96, align: 'left', label: 'CODE' },
     { key: 'title', w: 0, align: 'left', label: 'SUBJECT TITLE' },
     { key: 'units', w: 64, align: 'center', label: 'UNITS' },
-    { key: 'p', w: 80, align: 'center', label: 'PRELIM' },
-    { key: 'm', w: 84, align: 'center', label: 'MIDTERM' },
-    { key: 'pf', w: 90, align: 'center', label: 'PRE-FINAL' },
-    { key: 'pct', w: 100, align: 'center', label: 'AVERAGE %' },
-    { key: 'eq', w: 80, align: 'center', label: 'GRADE' },
-    { key: 'status', w: 120, align: 'center', label: 'STATUS' }
+    ...(vis.includes('p') ? [{ key: 'p', w: 80, align: 'center', label: 'PRELIM' }] : []),
+    ...(vis.includes('m') ? [{ key: 'm', w: 84, align: 'center', label: 'MIDTERM' }] : []),
+    ...(vis.includes('pf') ? [{ key: 'pf', w: 90, align: 'center', label: 'PRE-FINAL' }] : []),
+    ...(fin ? [
+      { key: 'pct', w: 100, align: 'center', label: 'AVERAGE %' },
+      { key: 'eq', w: 80, align: 'center', label: 'GRADE' },
+      { key: 'status', w: 120, align: 'center', label: 'STATUS' }
+    ] : [])
   ];
   const fixed = cols.reduce((a, c) => a + c.w, 0);
   const W = Math.max(wrap.clientWidth || 0, fixed + 280);
@@ -2617,19 +2661,22 @@ function drawGradeCanvas() {
       ctx.fillText(t, place(c, i), cy);
     });
 
-    // status pill
-    const si = cols.length - 1, sc = cols[si];
-    const label = status.toUpperCase();
-    ctx.font = `700 10px ${SANS}`;
-    const pw = ctx.measureText(label).width + 22, ph = 22;
-    const px = colX[si] + sc.w / 2 - pw / 2, py = cy - ph / 2;
-    ctx.fillStyle = status === 'passed' ? C.passedBg : status === 'failed' ? C.failedBg : C.otherBg;
-    ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(px, py, pw, ph, 11); else ctx.rect(px, py, pw, ph);
-    ctx.fill();
-    ctx.fillStyle = status === 'passed' ? C.passedFg : status === 'failed' ? C.failedFg : C.otherFg;
-    ctx.textAlign = 'center';
-    ctx.fillText(label, colX[si] + sc.w / 2, cy + 0.5);
+    // status pill (only when Finals are released)
+    const si = cols.findIndex(c => c.key === 'status');
+    if (si >= 0) {
+      const sc = cols[si];
+      const label = status.toUpperCase();
+      ctx.font = `700 10px ${SANS}`;
+      const pw = ctx.measureText(label).width + 22, ph = 22;
+      const px = colX[si] + sc.w / 2 - pw / 2, py = cy - ph / 2;
+      ctx.fillStyle = status === 'passed' ? C.passedBg : status === 'failed' ? C.failedBg : C.otherBg;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(px, py, pw, ph, 11); else ctx.rect(px, py, pw, ph);
+      ctx.fill();
+      ctx.fillStyle = status === 'passed' ? C.passedFg : status === 'failed' ? C.failedFg : C.otherFg;
+      ctx.textAlign = 'center';
+      ctx.fillText(label, colX[si] + sc.w / 2, cy + 0.5);
+    }
 
     if (ri < sm.rows.length - 1) {
       ctx.strokeStyle = C.line;
