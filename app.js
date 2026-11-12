@@ -139,6 +139,49 @@ async function initializeAppFromSupabase() {
     console.error("Error loading from Supabase:", err);
   }
 }
+async function startApp() {
+    // 1. Initialize appState structure
+    window.appState = {
+        settings: {},
+        subjects: [],
+        courses: [],
+        sections: [],
+        classwork: {},
+        teachers: [],
+        students: [], // Or object dictionary depending on your app design
+        grades: {},
+        log: []
+    };
+
+    // 2. Fetch all tables from Supabase on startup
+    const tables = ['settings', 'subjects', 'courses', 'sections', 'classwork', 'teachers', 'students', 'grades', 'log'];
+    
+    for (const tableName of tables) {
+        const { data, error } = await supabase.from(tableName).select('*');
+        if (!error && data) {
+            if (tableName === 'settings') {
+                window.appState.settings = data[0]?.data || data[0] || {};
+            } else if (tableName === 'log' || tableName === 'subjects' || tableName === 'courses' || tableName === 'sections') {
+                window.appState[tableName] = data.map(row => row.data || row);
+            } else {
+                // For dictionaries like students, teachers, grades, classwork
+                window.appState[tableName] = data.map(row => ({ id: row.id, ...(row.data || {}) }));
+            }
+        }
+    }
+
+    console.log("🚀 App initialized with Supabase data:", window.appState);
+
+    // 3. Now render the UI / login page
+    if (typeof renderApp === 'function') {
+        renderApp();
+    } else if (typeof renderLoginPage === 'function') {
+        document.getElementById('app').innerHTML = renderLoginPage();
+    }
+}
+
+// Run on page load
+window.addEventListener('DOMContentLoaded', startApp);
 
 // Call this when your app boots up
 window.addEventListener('DOMContentLoaded', () => {
