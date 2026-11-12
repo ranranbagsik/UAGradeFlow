@@ -836,12 +836,12 @@ async function handleStudentLogin(e) {
     return;
   }
 
-  // Because your table stores data inside a JSONB 'data' column
-  const stData = record.data || record;
-  
-  if (stData && stData.password === pass) {
-    setAuth({ role: 'student', studentId: record.id, name: stData.name });
-    showToast(`Signed in as ${stData.name}`, 'success');
+  // Extract the student data object stored in the row
+  const st = record.data || record;
+
+  if (st && String(st.password) === String(pass)) {
+    setAuth({ role: 'student', studentId: record.id, name: st.name });
+    showToast(`Signed in as ${st.name}`, 'success');
   } else {
     showToast('Invalid student number or password.', 'error');
   }
