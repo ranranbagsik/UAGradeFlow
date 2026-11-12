@@ -2478,7 +2478,25 @@ function handleSaveSettings(e) {
    14. STUDENT DASHBOARD VIEW
    ========================================================================== */
 function renderStudentDashboard() {
-  const student = appState.students.find(s => s.id === authUser.studentId);
+const currentStudentId = (typeof authUser !== 'undefined' ? authUser?.studentId : null) || (typeof auth !== 'undefined' ? auth?.studentId || auth?.id : null) || window.activeStudentId || localStorage.getItem('studentId');
+  
+  let student = null;
+  if (appState.students) {
+    if (appState.students[currentStudentId]) {
+      const raw = appState.students[currentStudentId];
+      student = raw.data || raw;
+    } else {
+      const list = Array.isArray(appState.students) ? appState.students : Object.values(appState.students);
+      const found = list.find(s => {
+        const sId = String(s.id || s.data?.id || s.data?.studentNumber || '').trim();
+        return sId === String(currentStudentId).trim();
+      });
+      if (found) {
+        student = found.data || found;
+      }
+    }
+  }
+
   if (!student) return `<div class="p-8 text-center text-xs text-slate-500">Student account not found in database.</div>`;
 
   // Released-term gating: Prelim/Midterm show only that term; Finals show everything
