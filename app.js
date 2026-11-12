@@ -108,37 +108,57 @@ async function loadAppStateFromSupabase() {
 }
 
 async function initializeAppFromSupabase() {
-  try {
-    console.log("Loading app state from Supabase...");
-    
-    // Fetch all core tables from Supabase
-    const tables = ['settings', 'subjects', 'courses', 'sections', 'classwork', 'teachers', 'students', 'grades', 'log'];
-    window.appState = window.appState || {};
+    try {
+        console.log("Loading app state from Supabase...");
 
-    for (const tableName of tables) {
-      const { data, error } = await supabase.from(tableName).select('*');
-      if (!error && data) {
-        if (tableName === 'settings') {
-          window.appState.settings = data[0]?.data || data[0] || {};
-        } else if (tableName === 'log') {
-          window.appState.log = data.map(row => row.data || row);
-        } else {
-          // Rebuild object dictionaries (like students[id] = data)
-          window.appState[tableName] = {};
-          data.forEach(row => {
-            window.appState[tableName][row.id] = row.data || row;
-          });
+        // Ensure the Supabase client is properly initialized
+        const client = window.supabase?.createClient 
+            ? window.supabase.createClient('https://cndqeuebqtfbuebrgcxy.supabase.co', 'sb_publishable__PCVowMDvTwJUmfMcctm6w_P-DMOG25')
+            : window.supabase;
+
+        if (!client || typeof client.from !== 'function') {
+            console.error("Supabase client could not be initialized!");
+            return;
         }
-      }
+
+        // Initialize appState structure
+        window.appState = window.appState || {};
+        const tables = ['settings', 'subjects', 'courses', 'sections', 'classwork', 'teachers', 'students', 'grades', 'log'];
+
+        for (const tableName of tables) {
+            const { data, error } = await client.from(tableName).select('*');
+            if (!error && data) {
+                if (tableName === 'settings') {
+                    window.appState.settings = data[0]?.data || data[0] || {};
+                } else if (tableName === 'log') {
+                    window.appState.log = data.map(row => row.data || row);
+                } else {
+                    window.appState[tableName] = {};
+                    data.forEach(row => {
+                        window.appState[tableName][row.id] = row.data || row;
+                    });
+                }
+            }
+        }
+
+        console.log("✅ App state successfully loaded from Supabase!", window.appState);
+
+        // Re-render the initial view if needed
+        if (typeof renderApp === 'function') {
+            renderApp();
+        } else if (typeof renderLoginPage === 'function') {
+            const appEl = document.getElementById('app');
+            if (appEl) appEl.innerHTML = renderLoginPage();
+        }
+    } catch (err) {
+        console.error("Error loading from Supabase:", err);
     }
-    console.log("✅ App state successfully loaded from Supabase!", window.appState);
-    
-    // Re-render the initial view if needed
-    if (typeof renderApp === 'function') renderApp();
-  } catch (err) {
-    console.error("Error loading from Supabase:", err);
-  }
 }
+
+// Make sure it runs on startup
+document.addEventListener('DOMContentLoaded', async () => {
+    await initializeAppFromSupabase();
+});
 async function startApp() {
     // 1. Initialize appState structure
     window.appState = {
