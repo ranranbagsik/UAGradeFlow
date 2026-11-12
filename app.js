@@ -916,21 +916,18 @@ function handleStudentLogin(e) {
   const number = document.getElementById('sLoginNumber').value.trim();
   const pass = document.getElementById('sLoginPass').value;
 
-  console.log("Attempting login for student number:", number);
-  console.log("Available students in appState:", appState.students);
+  console.log("--- LOGIN DEBUG ---");
+  console.log("Entered Student Number:", number, "(type:", typeof number, ")");
+  console.log("Entered Password:", pass, "(type:", typeof pass, ")");
+  console.log("appState.students:", appState.students);
 
   let st = null;
   if (appState.students) {
-    // 1. Direct lookup if key matches
     if (appState.students[number]) {
       st = appState.students[number];
-    } 
-    // 2. If appState.students is an array
-    else if (Array.isArray(appState.students)) {
+    } else if (Array.isArray(appState.students)) {
       st = appState.students.find(s => String(s.id || s.studentNumber || s.data?.id) === String(number));
-    } 
-    // 3. Search through object dictionary entries
-    else if (typeof appState.students === 'object') {
+    } else if (typeof appState.students === 'object') {
       for (const [key, val] of Object.entries(appState.students)) {
         const sData = val.data || val;
         if (String(key) === String(number) || String(sData.id) === String(number) || String(sData.studentNumber) === String(number)) {
@@ -941,15 +938,22 @@ function handleStudentLogin(e) {
     }
   }
 
+  console.log("Found Student Record:", st);
   const sData = st?.data || st;
+  console.log("Extracted Student Data:", sData);
+  console.log("Stored Password in DB:", sData?.password, "(type:", typeof sData?.password, ")");
 
-  if (sData && String(sData.password || sData.pass) === String(pass)) {
+  if (sData && String(sData.password || sData.pass).trim() === String(pass).trim()) {
+    console.log("✅ Password match! Logging in...");
     setAuth({ role: 'student', studentId: number, name: sData.name || 'Student' });
     showToast(`Signed in as ${sData.name || 'Student'}`, 'success');
   } else {
+    console.error("❌ Password mismatch or student not found!");
     showToast('Invalid student number or password.', 'error');
   }
 }
+
+
 /* ==========================================================================
    6. MAIN NAVIGATION & LAYOUT (WITH ANIMATED MOBILE DRAWER)
    ========================================================================== */
