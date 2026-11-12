@@ -10,6 +10,10 @@ if (typeof supabase === 'undefined') {
    ========================================================================== */
 const STORAGE_KEY = 'ua_gradeflow_v6_store';
 const AUTH_KEY = 'ua_gradeflow_v6_auth';
+const savedAuth = sessionStorage.getItem(AUTH_KEY);
+if (savedAuth) {
+  authUser = JSON.parse(savedAuth);
+}
 
 const COURSES = [
   { code: 'BSIT', name: 'BS Information Technology' },
