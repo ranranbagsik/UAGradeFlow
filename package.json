@@ -1,0 +1,11 @@
+{
+  "name": "ua-gradeflow",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.9"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js"
+  }
+}
