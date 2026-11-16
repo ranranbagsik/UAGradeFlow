@@ -48,17 +48,25 @@ async function syncTableToSupabase(tableName, recordId, dataObject) {
     }
 }
 
-// Load an entire table into an object or array format
-async function loadTableFromSupabase(tableName) {
-    const response = await fetch(`${SUPABASE_API}/${encodeURIComponent(tableName)}`);
-    if (!response.ok) {
-        const result = await response.json().catch(() => ({}));
-        throw new Error(result.error || `Unable to load ${tableName} (${response.status}).`);
+// Example of how Supabase data fetching should look instead of /api/tables/...
+async function loadAppData() {
+  try {
+    const { data: studentsData, error } = await supabase.from('students').select('*');
+    if (error) throw error;
+    
+    // Map array results into your appState dictionary format
+    appState.students = {};
+    if (studentsData) {
+      studentsData.forEach(row => {
+        appState.students[row.id] = row.data || row;
+      });
     }
-    const rows = await response.json();
-    return rows.length ? rows : null;
+    console.log("✅ App state successfully loaded from Supabase!", appState);
+    renderApp();
+  } catch (err) {
+    console.error("❌ Error loading app state from Supabase:", err);
+  }
 }
-
 // ==========================================
 // APPSTATE SUPABASE INTEGRATION
 // ==========================================
