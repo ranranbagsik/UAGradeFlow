@@ -48,23 +48,26 @@ async function syncTableToSupabase(tableName, recordId, dataObject) {
     }
 }
 
-// Example of how Supabase data fetching should look instead of /api/tables/...
-async function loadAppData() {
+//
+async function saveStudentToSupabase(studentData) {
   try {
-    const { data: studentsData, error } = await supabase.from('students').select('*');
-    if (error) throw error;
+    const studentId = String(studentData.id || studentData.studentNumber);
     
-    // Map array results into your appState dictionary format
-    appState.students = {};
-    if (studentsData) {
-      studentsData.forEach(row => {
-        appState.students[row.id] = row.data || row;
+    // Write directly to Supabase 'students' table
+    const { data, error } = await supabase
+      .from('students')
+      .upsert({ 
+        id: studentId, 
+        data: studentData, 
+        updated_at: new Date().toISOString() 
       });
-    }
-    console.log("✅ App state successfully loaded from Supabase!", appState);
-    renderApp();
+
+    if (error) throw error;
+    console.log("✅ Student saved successfully to Supabase:", data);
+    showToast('Student saved to database successfully!', 'success');
   } catch (err) {
-    console.error("❌ Error loading app state from Supabase:", err);
+    console.error("❌ Error saving student to Supabase:", err);
+    showToast('Failed to save student to database.', 'error');
   }
 }
 // ==========================================
