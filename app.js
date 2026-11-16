@@ -836,15 +836,17 @@ function handleStudentLogin(e) {
   const number = document.getElementById('sLoginNumber').value.trim();
   const pass = document.getElementById('sLoginPass').value.trim();
 
+  console.log("--- LOGIN DEBUG ---");
+  console.log("Entered Student ID:", number);
+  console.log("Entered Password:", pass);
+  console.log("appState.students:", appState?.students);
+
   let studentObj = null;
   if (appState?.students) {
-    // 1. Check direct dictionary key (how Supabase stores it)
     if (appState.students[number]) {
       const raw = appState.students[number];
       studentObj = raw.data || raw;
-    } 
-    // 2. Fallback check if stored as an array
-    else {
+    } else {
       const list = Array.isArray(appState.students) ? appState.students : Object.values(appState.students);
       const found = list.find(s => {
         const sObj = s.data || s;
@@ -857,9 +859,12 @@ function handleStudentLogin(e) {
     }
   }
 
+  console.log("Resolved studentObj:", studentObj);
   const storedPassword = String(studentObj?.password || studentObj?.pass || '').trim();
+  console.log("Stored Password in DB:", storedPassword);
 
   if (studentObj && storedPassword === pass) {
+    console.log("✅ Login successful!");
     setAuth({ 
       role: 'student', 
       studentId: number, 
@@ -867,6 +872,7 @@ function handleStudentLogin(e) {
     });
     showToast(`Signed in as ${studentObj.name || 'Student'}`, 'success');
   } else {
+    console.error("❌ Login failed: password mismatch or student not found.");
     showToast('Invalid student number or password.', 'error');
   }
 }
