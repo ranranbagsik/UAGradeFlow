@@ -836,16 +836,14 @@ function handleStudentLogin(e) {
   const number = document.getElementById('sLoginNumber').value.trim();
   const pass = document.getElementById('sLoginPass').value.trim();
 
-  console.log("Attempting login for ID:", number, "Pass:", pass);
-
   let studentObj = null;
   if (appState?.students) {
-    // 1. Direct dictionary key check
+    // 1. Check direct dictionary key (how Supabase stores it)
     if (appState.students[number]) {
       const raw = appState.students[number];
       studentObj = raw.data || raw;
     } 
-    // 2. Fallback to array or object values search
+    // 2. Fallback check if stored as an array
     else {
       const list = Array.isArray(appState.students) ? appState.students : Object.values(appState.students);
       const found = list.find(s => {
@@ -859,11 +857,9 @@ function handleStudentLogin(e) {
     }
   }
 
-  console.log("Resolved student object for login:", studentObj);
   const storedPassword = String(studentObj?.password || studentObj?.pass || '').trim();
 
   if (studentObj && storedPassword === pass) {
-    console.log("✅ Login successful!");
     setAuth({ 
       role: 'student', 
       studentId: number, 
@@ -871,11 +867,9 @@ function handleStudentLogin(e) {
     });
     showToast(`Signed in as ${studentObj.name || 'Student'}`, 'success');
   } else {
-    console.error("❌ Password mismatch. Expected:", storedPassword, "Got:", pass);
     showToast('Invalid student number or password.', 'error');
   }
 }
-
 /* ==========================================================================
    6. MAIN NAVIGATION & LAYOUT (WITH ANIMATED MOBILE DRAWER)
    ========================================================================== */
